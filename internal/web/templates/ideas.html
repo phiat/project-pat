@@ -1,0 +1,37 @@
+{{define "content"}}
+<section class="page-head">
+  <h1>ideas</h1>
+  <p class="muted">capture the seed. promote when ready.</p>
+</section>
+
+<section class="panel">
+  <form class="form" hx-post="/ideas" hx-target="#idea-list" hx-swap="outerHTML">
+    <input type="text" name="title" placeholder="title" required>
+    <textarea name="body" rows="2" placeholder="context (optional)"></textarea>
+    <button type="submit">add idea</button>
+  </form>
+</section>
+
+<section id="idea-list" class="panel">
+  {{if .Ideas}}
+  <ul class="stack">
+    {{range .Ideas}}
+    <li class="row">
+      <div class="row-main">
+        <div class="row-title">{{.Title}}</div>
+        {{if .Body}}<div class="row-sub">{{truncate .Body 220}}</div>{{end}}
+      </div>
+      <div class="row-actions">
+        <span class="muted">{{date .CreatedAt}}</span>
+        <form hx-post="/ideas/{{.ID}}/promote" hx-swap="none">
+          <button class="btn-ghost">promote →</button>
+        </form>
+      </div>
+    </li>
+    {{end}}
+  </ul>
+  {{else}}
+  <p class="muted">no ideas yet.</p>
+  {{end}}
+</section>
+{{end}}

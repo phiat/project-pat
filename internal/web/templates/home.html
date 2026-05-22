@@ -1,0 +1,64 @@
+{{define "content"}}
+<section class="hero">
+  <h1 class="display">at altitude.</h1>
+  <p class="lede">a workshop for ideation, periodic research, and design-doc drafting — powered by deepseek agents.</p>
+</section>
+
+<section class="grid grid-3">
+  <a class="card card-link" href="/ideas">
+    <div class="card-eyebrow">capture</div>
+    <h3>ideas</h3>
+    <p>jot half-formed thoughts. promote to a project when one earns its keep.</p>
+    <div class="card-stat">{{.IdeaCount}} open</div>
+  </a>
+  <a class="card card-link" href="/projects">
+    <div class="card-eyebrow">design</div>
+    <h3>projects</h3>
+    <p>each project gets a generated design doc you can iterate with the agents.</p>
+    <div class="card-stat">{{.ProjectCount}} drafting</div>
+  </a>
+  <a class="card card-link" href="/agents">
+    <div class="card-eyebrow">automate</div>
+    <h3>agents</h3>
+    <p>cron-scheduled missions: scan, summarize, propose, critique.</p>
+    <div class="card-stat">{{.AgentCount}} configured</div>
+  </a>
+</section>
+
+<section class="panel">
+  <header class="panel-head">
+    <h2>quick draft</h2>
+    <span class="muted">jot an idea — flash will sketch the seed of a design doc</span>
+  </header>
+  <form class="form" hx-post="/ideas/quick" hx-target="#quick-result" hx-swap="innerHTML">
+    <input type="text" name="title" placeholder="title (e.g. 'monorepo project switcher')" required>
+    <textarea name="body" rows="3" placeholder="optional context"></textarea>
+    <button type="submit">draft seed</button>
+  </form>
+  <div id="quick-result"></div>
+</section>
+
+<section class="panel">
+  <header class="panel-head">
+    <h2>recent runs</h2>
+    <a class="muted" href="/runs">all runs →</a>
+  </header>
+  {{if .RecentRuns}}
+  <table class="table">
+    <thead><tr><th>when</th><th>agent</th><th>status</th><th>tokens</th></tr></thead>
+    <tbody>
+    {{range .RecentRuns}}
+      <tr>
+        <td class="muted">{{date .StartedAt}}</td>
+        <td>{{if .AgentName}}{{.AgentName}}{{else}}<span class="muted">ad-hoc</span>{{end}}</td>
+        <td>{{statusPill .Status}}</td>
+        <td class="muted">{{.TokensIn}} → {{.TokensOut}}</td>
+      </tr>
+    {{end}}
+    </tbody>
+  </table>
+  {{else}}
+  <p class="muted">no runs yet. drafting from an idea or running an agent will land here.</p>
+  {{end}}
+</section>
+{{end}}

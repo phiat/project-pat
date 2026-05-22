@@ -1,0 +1,29 @@
+{{define "content"}}
+<section class="page-head">
+  <h1>projects</h1>
+  <p class="muted">each project carries a living design doc.</p>
+</section>
+
+<section class="panel">
+  <form class="form" hx-post="/projects" hx-target="#project-list" hx-swap="outerHTML">
+    <input type="text" name="title" placeholder="project title" required>
+    <textarea name="summary" rows="2" placeholder="one-line summary"></textarea>
+    <button type="submit">create project</button>
+  </form>
+</section>
+
+<section id="project-list" class="grid grid-2">
+  {{if .Projects}}
+    {{range .Projects}}
+    <a class="card card-link" href="/projects/{{.ID}}">
+      <div class="card-eyebrow">{{statusPill .Status}}</div>
+      <h3>{{.Title}}</h3>
+      {{if .Summary}}<p>{{truncate .Summary 200}}</p>{{end}}
+      <div class="card-stat muted">{{date .UpdatedAt}} · {{.Slug}}</div>
+    </a>
+    {{end}}
+  {{else}}
+    <p class="muted">no projects yet. start one above, or promote an idea.</p>
+  {{end}}
+</section>
+{{end}}

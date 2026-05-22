@@ -1,0 +1,48 @@
+{{define "content"}}
+<section class="page-head">
+  <h1>agents</h1>
+  <p class="muted">scheduled missions: scan, summarize, propose, critique.</p>
+</section>
+
+<section class="panel">
+  <form class="form form-grid" hx-post="/agents" hx-target="#agent-list" hx-swap="outerHTML">
+    <input type="text" name="name" placeholder="name (e.g. 'arxiv scanner')" required>
+    <input type="text" name="purpose" placeholder="purpose">
+    <input type="text" name="cron" placeholder="cron e.g. '0 8 * * *'">
+    <select name="model">
+      <option value="flash">flash</option>
+      <option value="pro">pro</option>
+    </select>
+    <textarea name="system_prompt" rows="3" placeholder="system prompt" required></textarea>
+    <button type="submit">add agent</button>
+  </form>
+</section>
+
+<section id="agent-list" class="panel">
+  {{if .Agents}}
+  <table class="table">
+    <thead><tr><th>name</th><th>model</th><th>cron</th><th>enabled</th><th></th></tr></thead>
+    <tbody>
+      {{range .Agents}}
+      <tr>
+        <td>
+          <div class="row-title">{{.Name}}</div>
+          {{if .Purpose}}<div class="row-sub muted">{{.Purpose}}</div>{{end}}
+        </td>
+        <td><span class="mono">{{.Model}}</span></td>
+        <td><span class="mono">{{if .Cron}}{{.Cron}}{{else}}—{{end}}</span></td>
+        <td>{{if .Enabled}}{{statusPill "on"}}{{else}}{{statusPill "off"}}{{end}}</td>
+        <td>
+          <form hx-post="/agents/{{.ID}}/run" hx-swap="none">
+            <button class="btn-ghost">run now</button>
+          </form>
+        </td>
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
+  {{else}}
+  <p class="muted">no agents yet.</p>
+  {{end}}
+</section>
+{{end}}

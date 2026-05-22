@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{{.Title}} · project-pat</title>
+<link rel="stylesheet" href="/static/css/app.css">
+<script src="https://unpkg.com/htmx.org@2.0.4" defer></script>
+<script type="importmap">
+{ "imports": { "three": "https://unpkg.com/three@0.169.0/build/three.module.js" } }
+</script>
+<script type="module" src="/static/js/background.js" defer></script>
+</head>
+<body>
+<canvas id="bg-canvas"></canvas>
+<div class="scrim"></div>
+
+<header class="topbar">
+  <a href="/" class="brand">
+    <span class="brand-mark">▣</span>
+    <span class="brand-name">project-pat</span>
+  </a>
+  <nav class="nav">
+    <a href="/">overview</a>
+    <a href="/ideas">ideas</a>
+    <a href="/projects">projects</a>
+    <a href="/agents">agents</a>
+    <a href="/runs">runs</a>
+  </nav>
+  <div class="topbar-right">
+    <span class="kbd">⌘K</span>
+  </div>
+</header>
+
+<main class="page">
+  {{template "content" .}}
+</main>
+
+<footer class="footer">
+  <span>flash · pro · sqlite · htmx</span>
+  <span class="muted">single-user · localhost</span>
+</footer>
+</body>
+</html>

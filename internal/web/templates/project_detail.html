@@ -1,0 +1,32 @@
+{{define "content"}}
+{{with .Project}}
+<section class="page-head">
+  <div class="page-head-left">
+    <a href="/projects" class="muted">← projects</a>
+    <h1>{{.Title}}</h1>
+    {{if .Summary}}<p class="muted">{{.Summary}}</p>{{end}}
+  </div>
+  <div class="page-head-right">
+    {{statusPill .Status}}
+    <span class="muted">{{.Slug}}</span>
+  </div>
+</section>
+
+<section class="panel">
+  <header class="panel-head">
+    <h2>design doc</h2>
+    <form hx-post="/projects/{{.ID}}/draft" hx-target="#doc" hx-swap="innerHTML" hx-indicator="#doc-spin">
+      <select name="model">
+        <option value="flash">flash · fast</option>
+        <option value="pro">pro · deeper</option>
+      </select>
+      <button class="btn-primary">draft / refine</button>
+      <span id="doc-spin" class="htmx-indicator muted">drafting…</span>
+    </form>
+  </header>
+  <article id="doc" class="doc">
+    {{if .DesignDoc}}<pre>{{.DesignDoc}}</pre>{{else}}<p class="muted">no doc yet. click draft to generate.</p>{{end}}
+  </article>
+</section>
+{{end}}
+{{end}}
