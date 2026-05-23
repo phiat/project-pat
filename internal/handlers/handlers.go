@@ -1087,8 +1087,23 @@ func (h *Handler) streamSSE(w http.ResponseWriter, r *http.Request, spec streamS
 		_ = h.S.FinishRun(runID, "failed", "", "streaming unsupported", 0, 0)
 		return
 	}
+	// SSE writes from the main path and the heartbeat goroutine need to
+	// be serialised — http.ResponseWriter is not safe for concurrent use.
+	var sseMu sync.Mutex
+	emit := func(event, data string) {
+		sseMu.Lock()
+		defer sseMu.Unlock()
+		writeSSE(w, flusher, event, data)
+	}
+	// Meta event first so the client can render "started run #N · pro
+	// (deepseek-v4-pro, thinking=medium) — waiting for first token…"
+	// even before the model produces anything. Reasoning models can take
+	// 30s+ before a visible content token, and the old protocol gave the
+	// UI nothing to show until then.
+	emit("meta", fmt.Sprintf("run=%d trigger=%s tier=%s model=%s reasoning=%s",
+		runID, spec.trigger, spec.modelKey, h.LLM.ModelFor(spec.modelKey), h.LLM.ReasoningFor(spec.modelKey)))
 	for _, e := range spec.preEvents {
-		writeSSE(w, flusher, e.Event, e.Data)
+		emit(e.Event, e.Data)
 	}
 
 	timeout := spec.timeout
@@ -1098,12 +1113,43 @@ func (h *Handler) streamSSE(w http.ResponseWriter, r *http.Request, spec streamS
 	ctx, cancel := context.WithTimeout(r.Context(), timeout)
 	defer cancel()
 
+	// Heartbeat: SSE comment line every 10s until the stream returns.
+	// Keeps intermediate proxies + the client from giving up on a silent
+	// connection during the thinking phase. Stops when the request
+	// finishes (defer close).
+	hbStop := make(chan struct{})
+	defer close(hbStop)
+	go func() {
+		t := time.NewTicker(10 * time.Second)
+		defer t.Stop()
+		for {
+			select {
+			case <-hbStop:
+				return
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				sseMu.Lock()
+				fmt.Fprint(w, ": keepalive\n\n")
+				flusher.Flush()
+				sseMu.Unlock()
+			}
+		}
+	}()
+
 	// Accumulate chunks so we can persist partial output if the client
-	// disconnects (ctx cancelled before LLM completes).
+	// disconnects (ctx cancelled before LLM completes). Reasoning tokens
+	// are streamed separately so the UI can show progress, but they
+	// don't roll into the final persisted text.
 	var partial strings.Builder
-	res, err := h.LLM.CompleteStream(ctx, spec.modelKey, spec.system, spec.user, func(chunk string) {
-		partial.WriteString(chunk)
-		writeSSE(w, flusher, "delta", chunk)
+	res, err := h.LLM.CompleteStream(ctx, spec.modelKey, spec.system, spec.user, llm.StreamHandler{
+		OnContent: func(chunk string) {
+			partial.WriteString(chunk)
+			emit("delta", chunk)
+		},
+		OnReasoning: func(chunk string) {
+			emit("reasoning", chunk)
+		},
 	})
 	if err != nil {
 		status := "failed"
@@ -1184,7 +1230,10 @@ func (h *Handler) streamTeamDraft(w http.ResponseWriter, r *http.Request, proj *
 	var plan strings.Builder
 	plannerRes, err := h.LLM.CompleteStream(ctx, llm.ModelProKey, systemTeamPlannerPrompt,
 		baseCtx+"\nProduce a structured plan as instructed.",
-		func(c string) { plan.WriteString(c); writeSSE(w, flusher, "delta", c) })
+		llm.StreamHandler{
+			OnContent:   func(c string) { plan.WriteString(c); writeSSE(w, flusher, "delta", c) },
+			OnReasoning: func(c string) { writeSSE(w, flusher, "reasoning", c) },
+		})
 	if err != nil {
 		abort("planner", err, plan.String())
 		return
@@ -1200,7 +1249,10 @@ func (h *Handler) streamTeamDraft(w http.ResponseWriter, r *http.Request, proj *
 	var crit strings.Builder
 	criticUser := baseCtx + fmt.Sprintf("\nPlan to critique:\n\n%s\n", plannerRes.Text)
 	criticRes, err := h.LLM.CompleteStream(ctx, llm.ModelProKey, systemTeamCriticPrompt, criticUser,
-		func(c string) { crit.WriteString(c); writeSSE(w, flusher, "delta", c) })
+		llm.StreamHandler{
+			OnContent:   func(c string) { crit.WriteString(c); writeSSE(w, flusher, "delta", c) },
+			OnReasoning: func(c string) { writeSSE(w, flusher, "reasoning", c) },
+		})
 	if err != nil {
 		abort("critic", err, crit.String())
 		return
@@ -1217,7 +1269,10 @@ func (h *Handler) streamTeamDraft(w http.ResponseWriter, r *http.Request, proj *
 	drafterUser := baseCtx + fmt.Sprintf("\nPlanner output:\n\n%s\n\nCritic notes on the plan:\n\n%s\n\nProduce the final design doc that resolves the critic's notes and follows the agreed plan.",
 		plannerRes.Text, criticRes.Text)
 	drafterRes, err := h.LLM.CompleteStream(ctx, llm.ModelProKey, systemDesignDocPrompt, drafterUser,
-		func(c string) { draft.WriteString(c); writeSSE(w, flusher, "delta", c) })
+		llm.StreamHandler{
+			OnContent:   func(c string) { draft.WriteString(c); writeSSE(w, flusher, "delta", c) },
+			OnReasoning: func(c string) { writeSSE(w, flusher, "reasoning", c) },
+		})
 	if err != nil {
 		abort("drafter", err, draft.String())
 		return

@@ -164,7 +164,7 @@ func (d *openaiDriver) Complete(ctx context.Context, modelKey, system, user stri
 	}, nil
 }
 
-func (d *openaiDriver) CompleteStream(ctx context.Context, modelKey, system, user string, onChunk func(string)) (*CompleteResult, error) {
+func (d *openaiDriver) CompleteStream(ctx context.Context, modelKey, system, user string, h StreamHandler) (*CompleteResult, error) {
 	model := d.modelFor(modelKey)
 	body, err := json.Marshal(openaiChatReq{
 		Model:           model,
@@ -200,6 +200,11 @@ func (d *openaiDriver) CompleteStream(ctx context.Context, modelKey, system, use
 		Choices []struct {
 			Delta struct {
 				Content string `json:"content"`
+				// DeepSeek (and any OpenAI-shape provider that supports
+				// reasoning) emits the chain-of-thought in this field
+				// during the thinking phase. Without surfacing it the
+				// client sees a long silence followed by the answer.
+				ReasoningContent string `json:"reasoning_content"`
 			} `json:"delta"`
 		} `json:"choices"`
 		Usage *struct {
@@ -238,10 +243,13 @@ func (d *openaiDriver) CompleteStream(ctx context.Context, modelKey, system, use
 			return nil, fmt.Errorf("%s stream error: %s", d.provider, ch.Error.Message)
 		}
 		for _, c := range ch.Choices {
+			if c.Delta.ReasoningContent != "" && h.OnReasoning != nil {
+				h.OnReasoning(c.Delta.ReasoningContent)
+			}
 			if c.Delta.Content != "" {
 				full.WriteString(c.Delta.Content)
-				if onChunk != nil {
-					onChunk(c.Delta.Content)
+				if h.OnContent != nil {
+					h.OnContent(c.Delta.Content)
 				}
 			}
 		}

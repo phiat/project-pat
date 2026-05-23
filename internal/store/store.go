@@ -367,6 +367,20 @@ func (s *Store) FinishRun(id int64, status, output, errMsg string, tokIn, tokOut
 	return err
 }
 
+// ReapOrphanedRuns marks any runs still in 'running' state as failed
+// with an "orphaned" error. Call once at server startup so the runs
+// table doesn't accumulate phantom in-flight rows from crashed/SIGKILL
+// processes. Returns the number of rows reaped.
+func (s *Store) ReapOrphanedRuns() (int64, error) {
+	res, err := s.DB.Exec(
+		`UPDATE runs SET status='failed', error='orphaned: server restarted while run was in flight', finished_at=CURRENT_TIMESTAMP WHERE status='running'`,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
 func (s *Store) ListRuns(limit int) ([]Run, error) {
 	if limit <= 0 {
 		limit = 50

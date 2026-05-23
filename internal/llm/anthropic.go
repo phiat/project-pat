@@ -187,7 +187,7 @@ func (d *anthropicDriver) Complete(ctx context.Context, modelKey, system, user s
 	}, nil
 }
 
-func (d *anthropicDriver) CompleteStream(ctx context.Context, modelKey, system, user string, onChunk func(string)) (*CompleteResult, error) {
+func (d *anthropicDriver) CompleteStream(ctx context.Context, modelKey, system, user string, h StreamHandler) (*CompleteResult, error) {
 	model := d.modelFor(modelKey)
 	body, err := json.Marshal(d.buildReq(modelKey, system, user, true))
 	if err != nil {
@@ -214,8 +214,9 @@ func (d *anthropicDriver) CompleteStream(ctx context.Context, modelKey, system, 
 	type contentBlockDelta struct {
 		Type  string `json:"type"`
 		Delta struct {
-			Type string `json:"type"`
-			Text string `json:"text"`
+			Type     string `json:"type"`
+			Text     string `json:"text"`
+			Thinking string `json:"thinking"`
 		} `json:"delta"`
 	}
 	type messageStart struct {
@@ -258,10 +259,22 @@ func (d *anthropicDriver) CompleteStream(ctx context.Context, modelKey, system, 
 		switch head.Type {
 		case "content_block_delta":
 			var cb contentBlockDelta
-			if err := json.Unmarshal([]byte(payload), &cb); err == nil && cb.Delta.Type == "text_delta" && cb.Delta.Text != "" {
-				full.WriteString(cb.Delta.Text)
-				if onChunk != nil {
-					onChunk(cb.Delta.Text)
+			if err := json.Unmarshal([]byte(payload), &cb); err == nil {
+				switch cb.Delta.Type {
+				case "text_delta":
+					if cb.Delta.Text != "" {
+						full.WriteString(cb.Delta.Text)
+						if h.OnContent != nil {
+							h.OnContent(cb.Delta.Text)
+						}
+					}
+				case "thinking_delta":
+					// Anthropic extended-thinking tokens. Stream to the
+					// caller so the UI can show progress during the
+					// thinking phase, but don't fold into res.Text.
+					if cb.Delta.Thinking != "" && h.OnReasoning != nil {
+						h.OnReasoning(cb.Delta.Thinking)
+					}
 				}
 			}
 		case "message_start":

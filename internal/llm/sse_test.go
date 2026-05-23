@@ -41,8 +41,8 @@ func TestOpenAIDriver_CompleteStream_AccumulatesAndCountsUsage(t *testing.T) {
 
 	d := newOpenAI("test", Opts{APIKey: "k", ModelFlash: "m-flash", ModelPro: "m-pro"}, srv.URL)
 	var got string
-	res, err := d.CompleteStream(context.Background(), ModelFlashKey, "sys", "user", func(chunk string) {
-		got += chunk
+	res, err := d.CompleteStream(context.Background(), ModelFlashKey, "sys", "user", StreamHandler{
+		OnContent: func(chunk string) { got += chunk },
 	})
 	if err != nil {
 		t.Fatalf("err: %v", err)
@@ -72,7 +72,7 @@ func TestOpenAIDriver_CompleteStream_IgnoresMalformedFrames(t *testing.T) {
 	defer srv.Close()
 
 	d := newOpenAI("test", Opts{APIKey: "k", ModelFlash: "m", ModelPro: "p"}, srv.URL)
-	res, err := d.CompleteStream(context.Background(), ModelFlashKey, "", "u", nil)
+	res, err := d.CompleteStream(context.Background(), ModelFlashKey, "", "u", StreamHandler{})
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
@@ -104,8 +104,8 @@ func TestAnthropicDriver_CompleteStream_AccumulatesAndUsage(t *testing.T) {
 
 	d := newAnthropic(Opts{APIKey: "k", ModelFlash: "claude-flash", ModelPro: "claude-pro"}, srv.URL)
 	var got string
-	res, err := d.CompleteStream(context.Background(), ModelProKey, "sys", "user", func(chunk string) {
-		got += chunk
+	res, err := d.CompleteStream(context.Background(), ModelProKey, "sys", "user", StreamHandler{
+		OnContent: func(chunk string) { got += chunk },
 	})
 	if err != nil {
 		t.Fatalf("err: %v", err)
@@ -140,7 +140,7 @@ func TestAnthropicDriver_CompleteStream_SkipsThinkingDeltas(t *testing.T) {
 	defer srv.Close()
 
 	d := newAnthropic(Opts{APIKey: "k", ModelFlash: "f", ModelPro: "p"}, srv.URL)
-	res, err := d.CompleteStream(context.Background(), ModelFlashKey, "", "u", nil)
+	res, err := d.CompleteStream(context.Background(), ModelFlashKey, "", "u", StreamHandler{})
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}

@@ -34,6 +34,11 @@ func runServer() {
 	defer database.Close()
 
 	st := store.New(database)
+	if n, err := st.ReapOrphanedRuns(); err != nil {
+		log.Printf("reap orphaned runs: %v", err)
+	} else if n > 0 {
+		log.Printf("reaped %d orphaned run(s) from a prior process", n)
+	}
 	client, err := llm.New(llm.Opts{
 		Provider:       cfg.LLMProvider,
 		APIKey:         cfg.LLMAPIKey,

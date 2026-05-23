@@ -16,6 +16,14 @@ let clusterColor = new Map();
 let hoverId = null;
 let selectedIds = [];
 let drag = null;
+// Animation state — declared up here because resize() runs synchronously
+// at module load and touches them. Module-scoped `let` is hoisted but
+// in the TDZ until its line is reached, so leaving these near tick()
+// would throw "can't access lexical declaration 'needRender' before
+// initialization" and abort the rest of the module (incl. the cluster
+// button's click listener).
+let animRAF = 0;
+let needRender = true;
 
 const cssBg = getComputedStyle(document.body);
 
@@ -174,23 +182,44 @@ function draw() {
       ctx.strokeStyle = n.selected ? "#f7f7f7" : "rgba(247,247,247,0.6)";
       ctx.stroke();
     }
-    // label
-    if (hoverId === n.id || n.selected) {
-      ctx.fillStyle = "#f7f7f7";
-      ctx.font = "13px ui-sans-serif, system-ui, sans-serif";
-      ctx.textBaseline = "middle";
-      ctx.fillText(n.title, n.x + n.r + 6, n.y);
-    } else {
-      ctx.fillStyle = "rgba(247,247,247,0.55)";
-      ctx.font = "11.5px ui-sans-serif, system-ui, sans-serif";
-      ctx.textBaseline = "middle";
-      ctx.fillText(truncate(n.title, 36), n.x + n.r + 6, n.y);
-    }
+    // label — drawn on top of a dark pill so it stays legible in both
+    // themes regardless of what the three.js landscape paints below.
+    const active = hoverId === n.id || n.selected;
+    const text = active ? n.title : truncate(n.title, 36);
+    ctx.font = active
+      ? "13px ui-sans-serif, system-ui, sans-serif"
+      : "11.5px ui-sans-serif, system-ui, sans-serif";
+    ctx.textBaseline = "middle";
+    drawLabelPill(ctx, text, n.x + n.r + 6, n.y, active);
   });
 }
 
-let animRAF = 0;
-let needRender = true;
+// drawLabelPill writes one canvas-text label onto a tinted dark
+// underlay. The underlay is essential: the bg three.js canvas can render
+// anything from black-forest cubes to cream-tinted (light theme) cubes,
+// and a bare white fillText disappears whenever a bright cube top sits
+// directly behind it.
+function drawLabelPill(ctx, text, x, y, active) {
+  const padX = 4, padY = 2;
+  const m = ctx.measureText(text);
+  const ascent  = m.actualBoundingBoxAscent  || 8;
+  const descent = m.actualBoundingBoxDescent || 3;
+  const h = ascent + descent + padY * 2;
+  const w = m.width + padX * 2;
+  ctx.fillStyle = active ? "rgba(13, 34, 8, 0.92)" : "rgba(13, 34, 8, 0.78)";
+  const r = 3;
+  const px = x - padX, py = y - h / 2;
+  ctx.beginPath();
+  ctx.moveTo(px + r, py);
+  ctx.arcTo(px + w, py, px + w, py + h, r);
+  ctx.arcTo(px + w, py + h, px, py + h, r);
+  ctx.arcTo(px, py + h, px, py, r);
+  ctx.arcTo(px, py, px + w, py, r);
+  ctx.closePath();
+  ctx.fill();
+  ctx.fillStyle = active ? "#f7f7f7" : "rgba(247, 247, 247, 0.88)";
+  ctx.fillText(text, x, y);
+}
 
 function tick() {
   step();
@@ -279,12 +308,24 @@ async function runCluster() {
   const spin  = document.getElementById("board-spin");
   const notes = document.getElementById("cluster-notes");
   spin.hidden = false;
-  notes.textContent = "";
+  notes.innerHTML = `<div class="stream-meta muted"></div><div class="stream-reasoning muted"></div><pre class="stream-pre"></pre>`;
+  const metaEl   = notes.querySelector(".stream-meta");
+  const reasonEl = notes.querySelector(".stream-reasoning");
+  const preEl    = notes.querySelector(".stream-pre");
+  const t0 = performance.now();
+  const tick = setInterval(() => {
+    const s = ((performance.now() - t0) / 1000).toFixed(1);
+    spin.textContent = `thinking… ${s}s`;
+  }, 200);
   let failed = false;
-  await window.streamSSE("/board/cluster", null, {
-    onDelta: (t) => { notes.textContent += t; },
-    onError: (msg) => { notes.innerHTML = `<p class="err">${window.escapeHTML(msg)}</p>`; failed = true; },
+  await window.streamSSE("/board/cluster", new FormData(), {
+    onMeta:      (m) => { metaEl.textContent = m; },
+    onReasoning: (t) => { reasonEl.textContent += t; },
+    onDelta:     (t) => { preEl.textContent += t; },
+    onError:     (msg) => { notes.innerHTML = `<p class="err">${window.escapeHTML(msg)}</p>`; failed = true; },
   });
+  clearInterval(tick);
+  spin.textContent = "thinking…";
   spin.hidden = true;
   if (failed) return;
   // refresh graph from server

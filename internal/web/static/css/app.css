@@ -102,6 +102,45 @@ a:hover { color: var(--c-beige); }
 .mono { font-family: ui-monospace, "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace; font-size: 12.5px; }
 .err { color: var(--c-err); }
 
+/* per-stream feedback: meta line on top, reasoning tokens (chain-of-
+   thought from reasoning models) below, then the final content stream.
+   Colors are pinned to palette tokens (no opacity hacks) so the cube
+   landscape behind the translucent panel can't wash them out. */
+.stream-meta {
+  font-family: ui-monospace, "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
+  font-size: 11.5px;
+  color: var(--c-sage);
+  margin-bottom: 6px;
+}
+.stream-reasoning {
+  font-style: italic;
+  font-size: 12.5px;
+  color: var(--c-sage);
+  background: var(--c-panel-2);
+  border-left: 2px solid var(--c-border);
+  padding: 6px 10px;
+  margin: 0 0 8px;
+  white-space: pre-wrap;
+  max-height: 240px;
+  overflow-y: auto;
+  border-radius: 4px;
+}
+.stream-reasoning:empty { display: none; }
+/* Live content stream pre — give it the same explicit foreground/bg
+   the rendered markdown gets, so it stays legible regardless of what
+   bleeds through the translucent panel. */
+.stream-pre {
+  color: var(--c-platinum);
+  background: var(--c-panel-2);
+  padding: 8px 10px;
+  border-radius: 4px;
+  white-space: pre-wrap;
+  font-family: ui-monospace, monospace;
+  font-size: 13px;
+  line-height: 1.5;
+  margin: 0;
+}
+
 .topbar {
   position: relative;
   z-index: 2;

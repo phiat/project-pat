@@ -302,8 +302,8 @@ func agentsCmd(c *cliCtx, args []string) error {
 		runID, _ := c.store.StartRun(sql.NullInt64{Int64: agent.ID, Valid: true}, projID, "cli", agent.SystemPrompt)
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 		defer cancel()
-		res, err := c.llm.CompleteStream(ctx, agent.Model, agent.SystemPrompt, userPrompt, func(chunk string) {
-			fmt.Fprint(c.out, chunk)
+		res, err := c.llm.CompleteStream(ctx, agent.Model, agent.SystemPrompt, userPrompt, llm.StreamHandler{
+			OnContent: func(chunk string) { fmt.Fprint(c.out, chunk) },
 		})
 		fmt.Fprintln(c.out)
 		if err != nil {

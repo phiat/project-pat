@@ -38,7 +38,7 @@ a single-user workshop for ideation, periodic research, and design-doc drafting 
 - **`/inbox`** — agent reports (cron + manual) land here with unread badges, star, and a token-refined line diff vs the previous successful run by the same agent. Opening an item marks it read.
 - **`/runs`** — full LLM run log with token usage, errors, and expandable rendered output.
 
-All LLM endpoints stream over SSE; the UI shows tokens arriving in real-time, then swaps in rendered markdown when the stream ends. If the client disconnects mid-stream, the partial output is preserved in the run row (`status='cancelled'`) instead of being thrown away.
+All LLM endpoints stream over SSE; the UI shows tokens arriving in real-time, then swaps in rendered markdown when the stream ends. Reasoning-model chain-of-thought (DeepSeek `reasoning_content` / Anthropic `thinking_delta`) streams as a separate `reasoning` event and renders in muted italics above the content — so the thinking phase doesn't read as a frozen UI. A `meta` event with run id + provider/model/effort lands before the first token. If the client disconnects mid-stream, the partial output is preserved in the run row (`status='cancelled'`) instead of being thrown away; orphaned `running` rows from a crashed process are reaped on the next server start.
 
 ## run it
 

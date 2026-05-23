@@ -24,11 +24,21 @@ type CompleteResult struct {
 	Model     string
 }
 
+// StreamHandler bundles the per-event callbacks for CompleteStream. Both
+// fields may be nil. Reasoning tokens (DeepSeek's reasoning_content,
+// Anthropic's thinking deltas) are surfaced separately from final
+// content so callers can render them differently — typically muted, and
+// not persisted into the final run output.
+type StreamHandler struct {
+	OnContent   func(string)
+	OnReasoning func(string)
+}
+
 // driver is the internal provider interface. Adding a new provider means
 // implementing this and wiring it into New.
 type driver interface {
 	Complete(ctx context.Context, modelKey, system, user string) (*CompleteResult, error)
-	CompleteStream(ctx context.Context, modelKey, system, user string, onChunk func(string)) (*CompleteResult, error)
+	CompleteStream(ctx context.Context, modelKey, system, user string, h StreamHandler) (*CompleteResult, error)
 	modelFor(key string) string
 	reasoningFor(key string) string
 	name() string
@@ -108,8 +118,8 @@ func (c *Client) Complete(ctx context.Context, modelKey, system, user string) (*
 	return c.drv.Complete(ctx, modelKey, system, user)
 }
 
-func (c *Client) CompleteStream(ctx context.Context, modelKey, system, user string, onChunk func(string)) (*CompleteResult, error) {
-	return c.drv.CompleteStream(ctx, modelKey, system, user, onChunk)
+func (c *Client) CompleteStream(ctx context.Context, modelKey, system, user string, h StreamHandler) (*CompleteResult, error) {
+	return c.drv.CompleteStream(ctx, modelKey, system, user, h)
 }
 
 // resolveBaseURL validates a user-supplied LLM_BASE_URL or falls back to
