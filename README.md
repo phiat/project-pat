@@ -43,19 +43,50 @@ Then open <http://localhost:8080>.
 
 Required `.env`:
 ```
-DEEPSEEK_API_KEY=sk-...
-# optional overrides:
-# DEEPSEEK_BASE_URL=https://api.deepseek.com/v1
-# DEEPSEEK_MODEL_FLASH=deepseek-v4-flash
-# DEEPSEEK_MODEL_PRO=deepseek-v4-pro
-# HOST=0.0.0.0       # bind address; default 0.0.0.0 (all interfaces, LAN-reachable). Set to 127.0.0.1 to lock to localhost only.
+# Generic LLM config (any OpenAI-compatible provider, or Anthropic):
+LLM_PROVIDER=deepseek       # openai | deepseek | anthropic | openrouter | ollama | groq | together
+LLM_API_KEY=sk-...          # falls back to DEEPSEEK_API_KEY / OPENAI_API_KEY / ANTHROPIC_API_KEY
+# LLM_BASE_URL=...          # override base URL; each provider has a sensible default
+# LLM_MODEL_FLASH=...       # tier 1: fast/cheap (per-provider default)
+# LLM_MODEL_PRO=...         # tier 2: deeper/slower (per-provider default)
+# LLM_REASONING_FLASH=off   # off | minimal | low | medium | high  (default: off)
+# LLM_REASONING_PRO=medium  # off | minimal | low | medium | high  (default: medium)
+
+# HTTP:
+# HOST=0.0.0.0              # bind address; default 0.0.0.0 (LAN/Tailscale-reachable). Set to 127.0.0.1 to lock to localhost.
 # PORT=8080
 # DB_PATH=projectpat.db
 ```
 
-The server binds on `0.0.0.0` by default — reachable on `http://localhost:8080` *and* `http://<your-LAN-ip>:8080`. There's no auth (single-user tool), so don't expose it to the public internet without putting it behind a reverse proxy / VPN / SSH tunnel.
+The server binds on `0.0.0.0` by default — reachable on `http://localhost:8080`, your LAN IP, and your Tailscale IP. There's no auth (single-user tool), so don't expose it to the public internet without putting it behind a reverse proxy / VPN / SSH tunnel.
 
-Model names default to `deepseek-v4-flash` / `deepseek-v4-pro`. If your account exposes different identifiers (e.g. `deepseek-chat`, `deepseek-reasoner`), set the env vars above.
+### Provider defaults
+
+| provider     | base URL (default)                       | flash default              | pro default                  |
+|--------------|------------------------------------------|----------------------------|------------------------------|
+| `deepseek`   | `https://api.deepseek.com/v1`            | `deepseek-v4-flash`        | `deepseek-v4-pro`            |
+| `openai`     | `https://api.openai.com/v1`              | `gpt-4o-mini`              | `gpt-4o`                     |
+| `anthropic`  | `https://api.anthropic.com/v1`           | `claude-haiku-4-5-20251001`| `claude-opus-4-7`            |
+| `openrouter` | `https://openrouter.ai/api/v1`           | _(set explicitly)_         | _(set explicitly)_           |
+| `ollama`     | `http://localhost:11434/v1`              | _(set explicitly)_         | _(set explicitly)_           |
+| `groq`       | `https://api.groq.com/openai/v1`         | `llama-3.1-8b-instant`     | `llama-3.3-70b-versatile`    |
+| `together`   | `https://api.together.xyz/v1`            | _(set explicitly)_         | _(set explicitly)_           |
+
+All non-Anthropic providers go through one OpenAI-compatible driver. Anthropic gets its own `/v1/messages` driver (with SSE streaming). Legacy `DEEPSEEK_*` env names still work for back-compat.
+
+### Reasoning / thinking effort
+
+Each tier can request extra "thinking" from the model:
+
+| effort    | OpenAI (`reasoning_effort`) | Anthropic (`thinking.budget_tokens`) |
+|-----------|-----------------------------|---------------------------------------|
+| `off`     | _omitted_                   | _disabled_                            |
+| `minimal` | `minimal`                   | 1 024                                 |
+| `low`     | `low`                       | 4 000                                 |
+| `medium`  | `medium`                    | 12 000                                |
+| `high`    | `high`                      | 32 000                                |
+
+Drivers silently omit the parameter when a model doesn't accept it, so leaving `off` is safe across all providers. Provider-specific caveats: Anthropic forces `temperature=1.0` when thinking is enabled and auto-bumps `max_tokens` by 4 096 above the budget for the answer. OpenAI's `reasoning_effort` is only meaningful on o1/o3/gpt-5-class models.
 
 ## what's wired
 

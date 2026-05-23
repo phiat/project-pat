@@ -34,7 +34,23 @@ func main() {
 	defer database.Close()
 
 	st := store.New(database)
-	client := llm.New(cfg.DeepSeekAPIKey, cfg.DeepSeekBaseURL, cfg.ModelFlash, cfg.ModelPro)
+	client, err := llm.New(llm.Opts{
+		Provider:       cfg.LLMProvider,
+		APIKey:         cfg.LLMAPIKey,
+		BaseURL:        cfg.LLMBaseURL,
+		ModelFlash:     cfg.LLMModelFlash,
+		ModelPro:       cfg.LLMModelPro,
+		ReasoningFlash: cfg.LLMReasoningFlash,
+		ReasoningPro:   cfg.LLMReasoningPro,
+	})
+	if err != nil {
+		log.Fatalf("llm: %v", err)
+	}
+	log.Printf("llm: provider=%s  flash=%s (reasoning=%s)  pro=%s (reasoning=%s)",
+		client.Provider(),
+		cfg.LLMModelFlash, cfg.LLMReasoningFlash,
+		cfg.LLMModelPro, cfg.LLMReasoningPro,
+	)
 	renderer, err := web.NewRenderer(cfg.TemplatesDir)
 	if err != nil {
 		log.Fatalf("templates: %v", err)
