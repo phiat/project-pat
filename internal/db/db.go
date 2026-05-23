@@ -57,18 +57,18 @@ CREATE TABLE IF NOT EXISTS agents (
 );
 
 CREATE TABLE IF NOT EXISTS runs (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    agent_id    INTEGER REFERENCES agents(id) ON DELETE SET NULL,
-    project_id  INTEGER REFERENCES projects(id) ON DELETE SET NULL,
-    trigger     TEXT NOT NULL DEFAULT 'manual',
-    status      TEXT NOT NULL DEFAULT 'pending',
-    prompt      TEXT NOT NULL DEFAULT '',
-    output      TEXT NOT NULL DEFAULT '',
-    error       TEXT NOT NULL DEFAULT '',
-    tokens_in   INTEGER NOT NULL DEFAULT 0,
-    tokens_out  INTEGER NOT NULL DEFAULT 0,
-    started_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    finished_at DATETIME
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    agent_id     INTEGER REFERENCES agents(id) ON DELETE SET NULL,
+    project_id   INTEGER REFERENCES projects(id) ON DELETE SET NULL,
+    trigger_kind TEXT NOT NULL DEFAULT 'manual',
+    status       TEXT NOT NULL DEFAULT 'pending',
+    prompt       TEXT NOT NULL DEFAULT '',
+    output       TEXT NOT NULL DEFAULT '',
+    error        TEXT NOT NULL DEFAULT '',
+    tokens_in    INTEGER NOT NULL DEFAULT 0,
+    tokens_out   INTEGER NOT NULL DEFAULT 0,
+    started_at   DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    finished_at  DATETIME
 );
 
 CREATE TABLE IF NOT EXISTS artifacts (
@@ -86,6 +86,31 @@ CREATE INDEX IF NOT EXISTS idx_artifacts_project ON artifacts(project_id);
 `
 
 func migrate(db *sql.DB) error {
-	_, err := db.Exec(schema)
-	return err
+	if _, err := db.Exec(schema); err != nil {
+		return err
+	}
+	return renameLegacyTriggerColumn(db)
+}
+
+func renameLegacyTriggerColumn(db *sql.DB) error {
+	rows, err := db.Query(`PRAGMA table_info(runs)`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var name, ctype string
+		var notnull, pk int
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			return err
+		}
+		if name == "trigger" {
+			rows.Close()
+			_, err := db.Exec(`ALTER TABLE runs RENAME COLUMN "trigger" TO trigger_kind`)
+			return err
+		}
+	}
+	return rows.Err()
 }

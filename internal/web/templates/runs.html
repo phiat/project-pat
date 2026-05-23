@@ -16,7 +16,7 @@
         <td class="mono">#{{.ID}}</td>
         <td class="muted">{{date .StartedAt}}</td>
         <td>{{if .AgentName}}{{.AgentName}}{{else}}<span class="muted">ad-hoc</span>{{end}}</td>
-        <td><span class="mono">{{.Trigger}}</span></td>
+        <td><span class="mono">{{.TriggerKind}}</span></td>
         <td>{{statusPill .Status}}</td>
         <td class="muted">{{.TokensIn}} → {{.TokensOut}}</td>
       </tr>

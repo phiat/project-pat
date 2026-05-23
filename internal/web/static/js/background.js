@@ -102,7 +102,7 @@ const dust = new THREE.Points(dustGeo, new THREE.PointsMaterial({
 scene.add(dust);
 
 const clock = new THREE.Clock();
-let lastUpdate = -1;
+let lastBaseStep = -1;
 
 function onResize() {
   const w = window.innerWidth, h = window.innerHeight;
@@ -115,10 +115,13 @@ window.addEventListener("resize", onResize, { passive: true });
 function tick() {
   const t = clock.getElapsedTime();
   const scroll = t * DRIFT;
-  // recompute heights ~10x/sec; smooth motion via mesh.position.z
-  if (t - lastUpdate > 0.1) {
-    lastUpdate = t;
-    const baseZ = Math.floor(scroll / CELL) * CELL;
+  // recompute heights exactly when the world-row offset advances; this is
+  // the same boundary at which mesh.position.z wraps back to 0, so heights
+  // and translation stay in sync (no visible pop on CELL crossings).
+  const baseStep = Math.floor(scroll / CELL);
+  if (baseStep !== lastBaseStep) {
+    lastBaseStep = baseStep;
+    const baseZ = baseStep * CELL;
     for (let iz = 0; iz < GRID_Z; iz++) {
       const pz = (iz - GRID_Z / 2) * CELL;
       const wz = pz + baseZ;
@@ -136,7 +139,7 @@ function tick() {
     mesh.instanceMatrix.needsUpdate = true;
     if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
   }
-  mesh.position.z = -(scroll % CELL);
+  mesh.position.z = -(scroll - baseStep * CELL);
 
   // gentle camera sway — feels like a window seat
   camera.position.x = Math.sin(t * 0.08) * 1.2;

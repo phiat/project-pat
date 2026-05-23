@@ -35,7 +35,10 @@ func main() {
 
 	st := store.New(database)
 	client := llm.New(cfg.DeepSeekAPIKey, cfg.DeepSeekBaseURL, cfg.ModelFlash, cfg.ModelPro)
-	renderer := web.NewRenderer(cfg.TemplatesDir)
+	renderer, err := web.NewRenderer(cfg.TemplatesDir)
+	if err != nil {
+		log.Fatalf("templates: %v", err)
+	}
 	h := handlers.New(st, client, renderer)
 
 	mux := http.NewServeMux()

@@ -107,7 +107,10 @@ func (c *Client) Complete(ctx context.Context, modelKey, system, user string) (*
 	}
 	defer resp.Body.Close()
 
-	raw, _ := io.ReadAll(resp.Body)
+	raw, readErr := io.ReadAll(resp.Body)
+	if readErr != nil {
+		return nil, fmt.Errorf("deepseek read body: %w", readErr)
+	}
 	if resp.StatusCode >= 400 {
 		return nil, fmt.Errorf("deepseek %d: %s", resp.StatusCode, string(raw))
 	}

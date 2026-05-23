@@ -273,6 +273,8 @@ func (h *Handler) agents(w http.ResponseWriter, r *http.Request) {
 		agents, _ := h.S.ListAgents()
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		renderAgentList(w, agents)
+	default:
+		http.Error(w, "method not allowed", 405)
 	}
 }
 

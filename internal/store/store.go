@@ -47,7 +47,7 @@ type Run struct {
 	AgentID    sql.NullInt64
 	AgentName  string
 	ProjectID  sql.NullInt64
-	Trigger    string
+	TriggerKind string
 	Status     string
 	Prompt     string
 	Output     string
@@ -188,7 +188,7 @@ func (s *Store) GetAgent(id int64) (*Agent, error) {
 
 func (s *Store) StartRun(agentID sql.NullInt64, projectID sql.NullInt64, trigger, prompt string) (int64, error) {
 	res, err := s.DB.Exec(
-		`INSERT INTO runs(agent_id, project_id, trigger, status, prompt) VALUES(?,?,?,?,?)`,
+		`INSERT INTO runs(agent_id, project_id, trigger_kind, status, prompt) VALUES(?,?,?,?,?)`,
 		agentID, projectID, trigger, "running", prompt,
 	)
 	if err != nil {
@@ -210,7 +210,7 @@ func (s *Store) ListRuns(limit int) ([]Run, error) {
 		limit = 50
 	}
 	rows, err := s.DB.Query(`
-        SELECT r.id, r.agent_id, COALESCE(a.name,''), r.project_id, r.trigger, r.status,
+        SELECT r.id, r.agent_id, COALESCE(a.name,''), r.project_id, r.trigger_kind, r.status,
                r.prompt, r.output, r.error, r.tokens_in, r.tokens_out, r.started_at, r.finished_at
         FROM runs r LEFT JOIN agents a ON a.id = r.agent_id
         ORDER BY r.id DESC LIMIT ?`, limit)
@@ -221,7 +221,7 @@ func (s *Store) ListRuns(limit int) ([]Run, error) {
 	var out []Run
 	for rows.Next() {
 		var r Run
-		if err := rows.Scan(&r.ID, &r.AgentID, &r.AgentName, &r.ProjectID, &r.Trigger, &r.Status,
+		if err := rows.Scan(&r.ID, &r.AgentID, &r.AgentName, &r.ProjectID, &r.TriggerKind, &r.Status,
 			&r.Prompt, &r.Output, &r.Error, &r.TokensIn, &r.TokensOut, &r.StartedAt, &r.FinishedAt); err != nil {
 			return nil, err
 		}
