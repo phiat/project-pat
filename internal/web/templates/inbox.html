@@ -1,0 +1,43 @@
+{{define "content"}}
+<section class="page-head">
+  <div class="page-head-left">
+    <h1>inbox</h1>
+    <p class="muted">agent reports land here · {{.Unread}} unread</p>
+  </div>
+  <div class="page-head-right">
+    <nav class="filter-nav">
+      <a href="/inbox" class="{{if not .Filter}}active{{end}}">all</a>
+      <a href="/inbox?filter=unread" class="{{if eq .Filter "unread"}}active{{end}}">unread</a>
+      <a href="/inbox?filter=starred" class="{{if eq .Filter "starred"}}active{{end}}">starred</a>
+    </nav>
+  </div>
+</section>
+
+<section class="panel">
+  {{if .Items}}
+  <ul class="stack">
+    {{range .Items}}
+    <li class="row {{if not .ReadAt.Valid}}row-unread{{end}}">
+      <div class="row-main">
+        <div class="row-title">
+          <a href="/inbox/{{.ID}}">{{if .AgentName}}{{.AgentName}}{{else}}ad-hoc{{end}}</a>
+          {{if .Starred}}<span class="star">★</span>{{end}}
+          {{if not .ReadAt.Valid}}<span class="pill pill-active">new</span>{{end}}
+          {{if eq .RunStatus "failed"}}<span class="pill pill-err">failed</span>{{end}}
+        </div>
+        <div class="row-sub">{{if .Summary}}{{.Summary}}{{else}}<span class="muted">(no summary)</span>{{end}}</div>
+      </div>
+      <div class="row-actions">
+        <span class="muted">{{date .StartedAt}}</span>
+        <form hx-post="/inbox/{{.ID}}/star" hx-swap="none">
+          <button class="btn-ghost" title="star/unstar">{{if .Starred}}★{{else}}☆{{end}}</button>
+        </form>
+      </div>
+    </li>
+    {{end}}
+  </ul>
+  {{else}}
+  <p class="muted">no items {{if .Filter}}for filter "{{.Filter}}"{{else}}yet. agents will deliver their reports here when they run.{{end}}</p>
+  {{end}}
+</section>
+{{end}}

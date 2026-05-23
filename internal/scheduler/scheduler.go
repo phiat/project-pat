@@ -108,4 +108,18 @@ func (sc *Scheduler) runAgent(a store.Agent) {
 		return
 	}
 	_ = sc.store.FinishRun(runID, "ok", res.Text, "", res.TokensIn, res.TokensOut)
+	if _, err := sc.store.CreateInboxItem(runID, firstLine(res.Text, 120)); err != nil {
+		log.Printf("scheduler: inbox enqueue failed: %v", err)
+	}
+}
+
+func firstLine(s string, n int) string {
+	s = strings.TrimSpace(s)
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		s = s[:i]
+	}
+	if len(s) > n {
+		s = s[:n] + "…"
+	}
+	return s
 }

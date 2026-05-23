@@ -286,6 +286,117 @@ func (s *Store) LatestArtifact(projectID int64, kind string) (*Artifact, error) 
 	return &a, nil
 }
 
+// Inbox
+
+type InboxItem struct {
+	ID        int64
+	RunID     int64
+	Summary   string
+	Starred   bool
+	ReadAt    sql.NullTime
+	CreatedAt time.Time
+	// joined from runs + agents for list rendering
+	AgentID    sql.NullInt64
+	AgentName  string
+	RunStatus  string
+	RunOutput  string
+	StartedAt  time.Time
+}
+
+func (s *Store) CreateInboxItem(runID int64, summary string) (int64, error) {
+	res, err := s.DB.Exec(
+		`INSERT INTO inbox_items(run_id, summary) VALUES(?,?)`,
+		runID, summary,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return res.LastInsertId()
+}
+
+func (s *Store) UnreadInboxCount() (int, error) {
+	var n int
+	err := s.DB.QueryRow(`SELECT COUNT(*) FROM inbox_items WHERE read_at IS NULL`).Scan(&n)
+	return n, err
+}
+
+func (s *Store) ListInboxItems(filter string) ([]InboxItem, error) {
+	var where string
+	switch filter {
+	case "unread":
+		where = "WHERE i.read_at IS NULL"
+	case "starred":
+		where = "WHERE i.starred = 1"
+	}
+	rows, err := s.DB.Query(`
+        SELECT i.id, i.run_id, i.summary, i.starred, i.read_at, i.created_at,
+               r.agent_id, COALESCE(a.name,''), r.status, r.output, r.started_at
+        FROM inbox_items i
+        JOIN runs r ON r.id = i.run_id
+        LEFT JOIN agents a ON a.id = r.agent_id
+        ` + where + `
+        ORDER BY i.id DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []InboxItem
+	for rows.Next() {
+		var i InboxItem
+		var starred int
+		if err := rows.Scan(&i.ID, &i.RunID, &i.Summary, &starred, &i.ReadAt, &i.CreatedAt,
+			&i.AgentID, &i.AgentName, &i.RunStatus, &i.RunOutput, &i.StartedAt); err != nil {
+			return nil, err
+		}
+		i.Starred = starred != 0
+		out = append(out, i)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) GetInboxItem(id int64) (*InboxItem, error) {
+	row := s.DB.QueryRow(`
+        SELECT i.id, i.run_id, i.summary, i.starred, i.read_at, i.created_at,
+               r.agent_id, COALESCE(a.name,''), r.status, r.output, r.started_at
+        FROM inbox_items i
+        JOIN runs r ON r.id = i.run_id
+        LEFT JOIN agents a ON a.id = r.agent_id
+        WHERE i.id = ?`, id)
+	var i InboxItem
+	var starred int
+	if err := row.Scan(&i.ID, &i.RunID, &i.Summary, &starred, &i.ReadAt, &i.CreatedAt,
+		&i.AgentID, &i.AgentName, &i.RunStatus, &i.RunOutput, &i.StartedAt); err != nil {
+		return nil, err
+	}
+	i.Starred = starred != 0
+	return &i, nil
+}
+
+func (s *Store) MarkInboxRead(id int64) error {
+	_, err := s.DB.Exec(`UPDATE inbox_items SET read_at = CURRENT_TIMESTAMP WHERE id=? AND read_at IS NULL`, id)
+	return err
+}
+
+func (s *Store) ToggleInboxStar(id int64) error {
+	_, err := s.DB.Exec(`UPDATE inbox_items SET starred = 1 - starred WHERE id=?`, id)
+	return err
+}
+
+// PreviousRunOutput returns the output of the most recent prior successful
+// run by the same agent, or "" if none. Used for inbox diff.
+func (s *Store) PreviousRunOutput(agentID, beforeRunID int64) (string, error) {
+	row := s.DB.QueryRow(`
+        SELECT output FROM runs
+        WHERE agent_id = ? AND id < ? AND status = 'ok'
+        ORDER BY id DESC LIMIT 1`, agentID, beforeRunID)
+	var s2 string
+	err := row.Scan(&s2)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	return s2, err
+}
+
 // helpers
 
 func ifEmpty(s, d string) string {

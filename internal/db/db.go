@@ -80,9 +80,19 @@ CREATE TABLE IF NOT EXISTS artifacts (
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS inbox_items (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id     INTEGER NOT NULL UNIQUE REFERENCES runs(id) ON DELETE CASCADE,
+    summary    TEXT NOT NULL DEFAULT '',
+    starred    INTEGER NOT NULL DEFAULT 0,
+    read_at    DATETIME,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE INDEX IF NOT EXISTS idx_runs_agent ON runs(agent_id);
 CREATE INDEX IF NOT EXISTS idx_runs_project ON runs(project_id);
 CREATE INDEX IF NOT EXISTS idx_artifacts_project ON artifacts(project_id);
+CREATE INDEX IF NOT EXISTS idx_inbox_unread ON inbox_items(read_at);
 `
 
 func migrate(db *sql.DB) error {

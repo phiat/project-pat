@@ -1,0 +1,36 @@
+{{define "content"}}
+{{with .Item}}
+<section class="page-head">
+  <div class="page-head-left">
+    <a href="/inbox" class="muted">← inbox</a>
+    <h1>{{if .AgentName}}{{.AgentName}}{{else}}ad-hoc{{end}}</h1>
+    <p class="muted">{{date .StartedAt}} · run #{{.RunID}}</p>
+  </div>
+  <div class="page-head-right">
+    {{statusPill .RunStatus}}
+    <form hx-post="/inbox/{{.ID}}/star" hx-swap="none" style="display:inline">
+      <button class="btn-ghost">{{if .Starred}}★ starred{{else}}☆ star{{end}}</button>
+    </form>
+  </div>
+</section>
+
+<section class="panel">
+  <header class="panel-head"><h2>output</h2></header>
+  <article class="doc">{{markdown .RunOutput}}</article>
+</section>
+
+{{if $.HasPrev}}
+<section class="panel">
+  <header class="panel-head">
+    <h2>diff vs previous successful run</h2>
+    <span class="muted">+ added · − removed</span>
+  </header>
+  {{$.Diff}}
+</section>
+{{else}}
+<section class="panel">
+  <p class="muted">no previous successful run by this agent to diff against.</p>
+</section>
+{{end}}
+{{end}}
+{{end}}

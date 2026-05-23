@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"html/template"
 	"log"
 	"net/http"
 	"strconv"
@@ -35,6 +36,8 @@ func (h *Handler) Mount(mux *http.ServeMux) {
 	mux.HandleFunc("/agents", h.agents)
 	mux.HandleFunc("/agents/", h.agentActions)
 	mux.HandleFunc("/runs", h.runs)
+	mux.HandleFunc("/inbox", h.inbox)
+	mux.HandleFunc("/inbox/", h.inboxActions)
 }
 
 func (h *Handler) home(w http.ResponseWriter, r *http.Request) {
@@ -425,9 +428,76 @@ func (h *Handler) agentActions(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		_ = h.S.FinishRun(runID, "ok", res.Text, "", res.TokensIn, res.TokensOut)
+		if _, err := h.S.CreateInboxItem(runID, firstLineSummary(res.Text, 120)); err != nil {
+			log.Printf("inbox enqueue: %v", err)
+		}
 	}()
 	w.Header().Set("HX-Trigger", "agent-run-started")
 	w.WriteHeader(202)
+}
+
+// ---- inbox ----
+
+func (h *Handler) inbox(w http.ResponseWriter, r *http.Request) {
+	filter := r.URL.Query().Get("filter")
+	items, _ := h.S.ListInboxItems(filter)
+	unread, _ := h.S.UnreadInboxCount()
+	h.render(w, "inbox", map[string]any{
+		"Title":  "inbox",
+		"Items":  items,
+		"Filter": filter,
+		"Unread": unread,
+	})
+}
+
+func (h *Handler) inboxActions(w http.ResponseWriter, r *http.Request) {
+	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+	if len(parts) < 2 {
+		http.NotFound(w, r)
+		return
+	}
+	id, err := strconv.ParseInt(parts[1], 10, 64)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	item, err := h.S.GetInboxItem(id)
+	if err != nil {
+		http.Error(w, err.Error(), 404)
+		return
+	}
+	if len(parts) == 2 && r.Method == http.MethodGet {
+		var prev string
+		var diff template.HTML
+		if item.AgentID.Valid {
+			prev, _ = h.S.PreviousRunOutput(item.AgentID.Int64, item.RunID)
+			if prev != "" {
+				diff = web.LineDiff(prev, item.RunOutput)
+			}
+		}
+		_ = h.S.MarkInboxRead(id)
+		h.render(w, "inbox_item", map[string]any{
+			"Title":   "inbox item",
+			"Item":    item,
+			"HasPrev": prev != "",
+			"Diff":    diff,
+		})
+		return
+	}
+	if len(parts) == 3 && r.Method == http.MethodPost {
+		switch parts[2] {
+		case "read":
+			_ = h.S.MarkInboxRead(id)
+			w.WriteHeader(204)
+			return
+		case "star":
+			_ = h.S.ToggleInboxStar(id)
+			w.Header().Set("HX-Refresh", "true")
+			w.WriteHeader(204)
+			return
+		}
+	}
+	http.NotFound(w, r)
 }
 
 // ---- runs ----
@@ -440,6 +510,13 @@ func (h *Handler) runs(w http.ResponseWriter, r *http.Request) {
 // ---- helpers ----
 
 func (h *Handler) render(w http.ResponseWriter, page string, data any) {
+	if m, ok := data.(map[string]any); ok {
+		if _, present := m["UnreadInbox"]; !present {
+			if n, err := h.S.UnreadInboxCount(); err == nil {
+				m["UnreadInbox"] = n
+			}
+		}
+	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := h.R.Render(w, page, data); err != nil {
 		log.Printf("render %s: %v", page, err)
@@ -478,6 +555,17 @@ func renderAgentList(w http.ResponseWriter, agents []store.Agent) {
 func htmlEscape(s string) string {
 	r := strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;", `"`, "&#34;", `'`, "&#39;")
 	return r.Replace(s)
+}
+
+func firstLineSummary(s string, n int) string {
+	s = strings.TrimSpace(s)
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		s = s[:i]
+	}
+	if len(s) > n {
+		s = s[:n] + "…"
+	}
+	return s
 }
 
 func truncate(s string, n int) string {
