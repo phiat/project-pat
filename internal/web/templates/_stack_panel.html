@@ -1,0 +1,36 @@
+{{define "stack_panel"}}
+<section class="panel" id="stack-panel">
+  <header class="panel-head">
+    <h2>stack</h2>
+    <form hx-post="/projects/{{.ProjectID}}/stack/preset" hx-target="#stack-panel" hx-swap="outerHTML">
+      <select name="preset_id" onchange="this.form.requestSubmit()">
+        <option value="">— preset —</option>
+        {{range .Presets}}
+          <option value="{{.ID}}" {{if eq $.PresetID .ID}}selected{{end}}>{{.Label}} · {{.Blurb}}</option>
+        {{end}}
+      </select>
+    </form>
+  </header>
+
+  {{if .Incompats}}
+  <div class="banner banner-warn">
+    <strong>{{len .Incompats}}</strong> slot(s) no longer compatible with the chosen runtime — click to review: {{range $i, $s := .Incompats}}{{if $i}}, {{end}}<a href="#" hx-get="/projects/{{$.ProjectID}}/stack/popover?slot={{$s}}" hx-target="#stack-popover" hx-swap="innerHTML">{{$s}}</a>{{end}}
+  </div>
+  {{end}}
+
+  <div class="chip-row">
+    {{range .Chips}}
+    <button class="chip{{if .Empty}} chip-empty{{end}}{{if .Incompat}} chip-warn{{end}}"
+            type="button"
+            hx-get="/projects/{{$.ProjectID}}/stack/popover?slot={{.SlotKey}}"
+            hx-target="#stack-popover"
+            hx-swap="innerHTML">
+      <span class="chip-slot">{{.SlotLabel}}</span>
+      <span class="chip-value">{{if .Empty}}—{{else}}{{.Value}}{{if .Version}} {{.Version}}{{end}}{{end}}</span>
+    </button>
+    {{end}}
+  </div>
+
+  <div id="stack-popover" class="stack-popover"></div>
+</section>
+{{end}}

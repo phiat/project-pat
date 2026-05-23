@@ -20,15 +20,16 @@ type Idea struct {
 }
 
 type Project struct {
-	ID         int64
-	Slug       string
-	Title      string
-	Summary    string
-	DesignDoc  string
-	Status     string
-	FromIdea   sql.NullInt64
-	CreatedAt  time.Time
-	UpdatedAt  time.Time
+	ID          int64
+	Slug        string
+	Title       string
+	Summary     string
+	DesignDoc   string
+	Status      string
+	FromIdea    sql.NullInt64
+	StackPreset string
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
 }
 
 type Agent struct {
@@ -112,7 +113,7 @@ func (s *Store) CreateProject(p Project) (int64, error) {
 }
 
 func (s *Store) ListProjects() ([]Project, error) {
-	rows, err := s.DB.Query(`SELECT id, slug, title, summary, design_doc, status, from_idea, created_at, updated_at FROM projects ORDER BY id DESC`)
+	rows, err := s.DB.Query(`SELECT id, slug, title, summary, design_doc, status, from_idea, stack_preset, created_at, updated_at FROM projects ORDER BY id DESC`)
 	if err != nil {
 		return nil, err
 	}
@@ -120,7 +121,7 @@ func (s *Store) ListProjects() ([]Project, error) {
 	var out []Project
 	for rows.Next() {
 		var p Project
-		if err := rows.Scan(&p.ID, &p.Slug, &p.Title, &p.Summary, &p.DesignDoc, &p.Status, &p.FromIdea, &p.CreatedAt, &p.UpdatedAt); err != nil {
+		if err := rows.Scan(&p.ID, &p.Slug, &p.Title, &p.Summary, &p.DesignDoc, &p.Status, &p.FromIdea, &p.StackPreset, &p.CreatedAt, &p.UpdatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, p)
@@ -129,12 +130,69 @@ func (s *Store) ListProjects() ([]Project, error) {
 }
 
 func (s *Store) GetProject(id int64) (*Project, error) {
-	row := s.DB.QueryRow(`SELECT id, slug, title, summary, design_doc, status, from_idea, created_at, updated_at FROM projects WHERE id=?`, id)
+	row := s.DB.QueryRow(`SELECT id, slug, title, summary, design_doc, status, from_idea, stack_preset, created_at, updated_at FROM projects WHERE id=?`, id)
 	var p Project
-	if err := row.Scan(&p.ID, &p.Slug, &p.Title, &p.Summary, &p.DesignDoc, &p.Status, &p.FromIdea, &p.CreatedAt, &p.UpdatedAt); err != nil {
+	if err := row.Scan(&p.ID, &p.Slug, &p.Title, &p.Summary, &p.DesignDoc, &p.Status, &p.FromIdea, &p.StackPreset, &p.CreatedAt, &p.UpdatedAt); err != nil {
 		return nil, err
 	}
 	return &p, nil
+}
+
+// Stack picks
+
+type StackPick struct {
+	ProjectID int64
+	Slot      string
+	OptionID  string
+	FreeText  string
+	Version   string
+	Note      string
+	UpdatedAt time.Time
+}
+
+func (s *Store) UpsertStackPick(p StackPick) error {
+	_, err := s.DB.Exec(`
+        INSERT INTO project_stack(project_id, slot, option_id, free_text, version, note)
+        VALUES(?,?,?,?,?,?)
+        ON CONFLICT(project_id, slot) DO UPDATE SET
+            option_id=excluded.option_id,
+            free_text=excluded.free_text,
+            version=excluded.version,
+            note=excluded.note,
+            updated_at=CURRENT_TIMESTAMP`,
+		p.ProjectID, p.Slot, p.OptionID, p.FreeText, p.Version, p.Note,
+	)
+	return err
+}
+
+func (s *Store) ClearStackSlot(projectID int64, slot string) error {
+	_, err := s.DB.Exec(`DELETE FROM project_stack WHERE project_id=? AND slot=?`, projectID, slot)
+	return err
+}
+
+func (s *Store) ListStackPicks(projectID int64) ([]StackPick, error) {
+	rows, err := s.DB.Query(
+		`SELECT project_id, slot, option_id, free_text, version, note, updated_at
+         FROM project_stack WHERE project_id=? ORDER BY slot`, projectID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []StackPick
+	for rows.Next() {
+		var p StackPick
+		if err := rows.Scan(&p.ProjectID, &p.Slot, &p.OptionID, &p.FreeText, &p.Version, &p.Note, &p.UpdatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) SetProjectStackPreset(projectID int64, presetID string) error {
+	_, err := s.DB.Exec(`UPDATE projects SET stack_preset=?, updated_at=CURRENT_TIMESTAMP WHERE id=?`, presetID, projectID)
+	return err
 }
 
 func (s *Store) UpdateProjectDoc(id int64, designDoc string) error {

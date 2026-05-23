@@ -12,6 +12,7 @@ import (
 	"github.com/robfig/cron/v3"
 
 	"projectpat/internal/llm"
+	"projectpat/internal/stack"
 	"projectpat/internal/store"
 )
 
@@ -106,7 +107,9 @@ func (sc *Scheduler) runAgent(a store.Agent) {
 	if a.ProjectID.Valid {
 		projID = a.ProjectID
 		if proj, err := sc.store.GetProject(a.ProjectID.Int64); err == nil {
-			userPrompt = fmt.Sprintf(
+			picks, _ := sc.store.ListStackPicks(proj.ID)
+			stackCtx := stack.FormatForPrompt(picksToCatalog(picks))
+			userPrompt = stackCtx + fmt.Sprintf(
 				"Scheduled mission for project %q. Purpose: %s.\n\nLive design doc:\n\n%s\n\nProduce a concise structured report relevant to the project's current state.",
 				proj.Title, a.Purpose, proj.DesignDoc,
 			)
@@ -124,6 +127,20 @@ func (sc *Scheduler) runAgent(a store.Agent) {
 	if _, err := sc.store.CreateInboxItem(runID, firstLine(res.Text, 120)); err != nil {
 		log.Printf("scheduler: inbox enqueue failed: %v", err)
 	}
+}
+
+func picksToCatalog(picks []store.StackPick) []stack.Pick {
+	out := make([]stack.Pick, 0, len(picks))
+	for _, p := range picks {
+		out = append(out, stack.Pick{
+			Slot:     p.Slot,
+			OptionID: p.OptionID,
+			FreeText: p.FreeText,
+			Version:  p.Version,
+			Note:     p.Note,
+		})
+	}
+	return out
 }
 
 func firstLine(s string, n int) string {

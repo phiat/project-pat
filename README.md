@@ -48,9 +48,12 @@ DEEPSEEK_API_KEY=sk-...
 # DEEPSEEK_BASE_URL=https://api.deepseek.com/v1
 # DEEPSEEK_MODEL_FLASH=deepseek-v4-flash
 # DEEPSEEK_MODEL_PRO=deepseek-v4-pro
+# HOST=0.0.0.0       # bind address; default 0.0.0.0 (all interfaces, LAN-reachable). Set to 127.0.0.1 to lock to localhost only.
 # PORT=8080
 # DB_PATH=projectpat.db
 ```
+
+The server binds on `0.0.0.0` by default — reachable on `http://localhost:8080` *and* `http://<your-LAN-ip>:8080`. There's no auth (single-user tool), so don't expose it to the public internet without putting it behind a reverse proxy / VPN / SSH tunnel.
 
 Model names default to `deepseek-v4-flash` / `deepseek-v4-pro`. If your account exposes different identifiers (e.g. `deepseek-chat`, `deepseek-reasoner`), set the env vars above.
 

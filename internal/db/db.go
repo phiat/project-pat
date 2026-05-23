@@ -34,15 +34,27 @@ CREATE TABLE IF NOT EXISTS ideas (
 );
 
 CREATE TABLE IF NOT EXISTS projects (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    slug        TEXT NOT NULL UNIQUE,
-    title       TEXT NOT NULL,
-    summary     TEXT NOT NULL DEFAULT '',
-    design_doc  TEXT NOT NULL DEFAULT '',
-    status      TEXT NOT NULL DEFAULT 'drafting',
-    from_idea   INTEGER REFERENCES ideas(id),
-    created_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    slug          TEXT NOT NULL UNIQUE,
+    title         TEXT NOT NULL,
+    summary       TEXT NOT NULL DEFAULT '',
+    design_doc    TEXT NOT NULL DEFAULT '',
+    status        TEXT NOT NULL DEFAULT 'drafting',
+    from_idea     INTEGER REFERENCES ideas(id),
+    stack_preset  TEXT NOT NULL DEFAULT '',
+    created_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS project_stack (
+    project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    slot       TEXT NOT NULL,
+    option_id  TEXT NOT NULL DEFAULT '',
+    free_text  TEXT NOT NULL DEFAULT '',
+    version    TEXT NOT NULL DEFAULT '',
+    note       TEXT NOT NULL DEFAULT '',
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (project_id, slot)
 );
 
 CREATE TABLE IF NOT EXISTS agents (
@@ -132,7 +144,19 @@ func migrate(db *sql.DB) error {
 	if err := renameLegacyTriggerColumn(db); err != nil {
 		return err
 	}
-	return addAgentProjectColumn(db)
+	if err := addAgentProjectColumn(db); err != nil {
+		return err
+	}
+	return addProjectStackPresetColumn(db)
+}
+
+func addProjectStackPresetColumn(db *sql.DB) error {
+	has, err := columnExists(db, "projects", "stack_preset")
+	if err != nil || has {
+		return err
+	}
+	_, err = db.Exec(`ALTER TABLE projects ADD COLUMN stack_preset TEXT NOT NULL DEFAULT ''`)
+	return err
 }
 
 func addAgentProjectColumn(db *sql.DB) error {

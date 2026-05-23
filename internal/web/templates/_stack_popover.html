@@ -1,0 +1,44 @@
+{{define "stack_popover"}}
+<div class="stack-popover-inner">
+  <header class="popover-head">
+    <strong>{{.Slot.Label}}</strong>
+    {{if .Slot.Help}}<span class="muted">· {{.Slot.Help}}</span>{{end}}
+    <button class="popover-close" type="button"
+            hx-get="/projects/{{.ProjectID}}/stack/popover/close"
+            hx-target="#stack-popover" hx-swap="innerHTML">✕</button>
+  </header>
+
+  <form hx-post="/projects/{{.ProjectID}}/stack" hx-target="#stack-panel" hx-swap="outerHTML">
+    <input type="hidden" name="slot" value="{{.Slot.Key}}">
+
+    <ul class="option-list">
+      {{range .Options}}
+      <li class="option {{if not (compatible . $.Runtime)}}option-incompat{{end}}">
+        <label>
+          <input type="radio" name="option_id" value="{{.ID}}" {{if eq $.Current.OptionID .ID}}checked{{end}}>
+          <strong>{{.Label}}</strong>
+          {{if .Blurb}}<span class="muted">{{.Blurb}}</span>{{end}}
+          {{if not (compatible . $.Runtime)}}<span class="incompat-tag">not compatible with {{$.Runtime}}</span>{{end}}
+        </label>
+      </li>
+      {{end}}
+      <li class="option option-other">
+        <label>
+          <input type="radio" name="option_id" value="" {{if not $.Current.OptionID}}checked{{end}}>
+          <strong>other / blank</strong>
+        </label>
+        <input class="other-input" type="text" name="free_text" value="{{$.Current.FreeText}}" placeholder="custom value (optional)">
+      </li>
+    </ul>
+
+    <div class="popover-row">
+      <input type="text" name="version" value="{{$.Current.Version}}" placeholder="version (optional)">
+      <input type="text" name="note"    value="{{$.Current.Note}}"    placeholder="note (optional)">
+      <button class="btn-primary" type="submit">save</button>
+      <button class="btn-ghost" type="button"
+              hx-post="/projects/{{.ProjectID}}/stack/clear?slot={{.Slot.Key}}"
+              hx-target="#stack-panel" hx-swap="outerHTML">clear</button>
+    </div>
+  </form>
+</div>
+{{end}}

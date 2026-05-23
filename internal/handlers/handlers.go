@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"projectpat/internal/llm"
+	"projectpat/internal/stack"
 	"projectpat/internal/store"
 	"projectpat/internal/web"
 )
@@ -245,6 +246,7 @@ func (h *Handler) projectActions(w http.ResponseWriter, r *http.Request) {
 		if brief != nil {
 			briefItems, _ = h.S.ListBriefItems(brief.ID)
 		}
+		stackData := h.buildStackPanelData(proj)
 		h.render(w, "project_detail", map[string]any{
 			"Title":      proj.Title,
 			"Project":    proj,
@@ -253,6 +255,7 @@ func (h *Handler) projectActions(w http.ResponseWriter, r *http.Request) {
 			"Timeline":   timeline,
 			"Brief":      brief,
 			"BriefItems": briefItems,
+			"Stack":      stackData,
 		})
 		return
 	}
@@ -273,9 +276,297 @@ func (h *Handler) projectActions(w http.ResponseWriter, r *http.Request) {
 		case "brief":
 			h.streamBrief(w, r, proj)
 			return
+		case "stack":
+			h.stackUpsert(w, r, proj)
+			return
+		}
+	}
+	if len(parts) == 4 && parts[2] == "stack" && r.Method == http.MethodPost {
+		switch parts[3] {
+		case "preset":
+			h.stackApplyPreset(w, r, proj)
+			return
+		case "clear":
+			h.stackClear(w, r, proj)
+			return
+		}
+	}
+	if len(parts) >= 4 && parts[2] == "stack" && parts[3] == "popover" && r.Method == http.MethodGet {
+		if len(parts) == 4 {
+			h.stackPopover(w, r, proj)
+			return
+		}
+		if len(parts) == 5 && parts[4] == "close" {
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			w.Write([]byte(""))
+			return
 		}
 	}
 	http.NotFound(w, r)
+}
+
+// ---- stack handlers ----
+
+func (h *Handler) renderStackPanel(w http.ResponseWriter, proj *store.Project) {
+	picks, _ := h.S.ListStackPicks(proj.ID)
+	runtime := runtimeOptionID(picks)
+	incompats := stack.IncompatibleSlots(picksToCatalog(picks), runtime)
+	incompatSet := make(map[string]bool, len(incompats))
+	for _, s := range incompats {
+		incompatSet[s] = true
+	}
+
+	chips := make([]chipData, 0, len(stack.Slots))
+	for _, s := range stack.Slots {
+		c := chipData{SlotKey: s.Key, SlotLabel: s.Label, Empty: true}
+		for _, p := range picks {
+			if p.Slot != s.Key {
+				continue
+			}
+			c.Empty = false
+			c.Version = p.Version
+			if p.OptionID != "" {
+				if o, ok := stack.OptionByID(p.OptionID); ok {
+					c.Value = o.Label
+				} else {
+					c.Value = p.OptionID
+				}
+			} else if p.FreeText != "" {
+				c.Value = p.FreeText
+			} else {
+				c.Empty = true
+			}
+			break
+		}
+		if incompatSet[s.Key] {
+			c.Incompat = true
+		}
+		chips = append(chips, c)
+	}
+
+	data := stackPanelData{
+		ProjectID: proj.ID,
+		PresetID:  proj.StackPreset,
+		Chips:     chips,
+		Incompats: incompats,
+		Presets:   stack.Presets,
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if err := h.R.RenderPartial(w, "stack_panel", data); err != nil {
+		log.Printf("render stack_panel: %v", err)
+		http.Error(w, "render", 500)
+	}
+}
+
+func (h *Handler) stackPopover(w http.ResponseWriter, r *http.Request, proj *store.Project) {
+	slotKey := r.URL.Query().Get("slot")
+	slot, ok := stack.SlotByKey(slotKey)
+	if !ok {
+		http.Error(w, "bad slot", 400)
+		return
+	}
+	picks, _ := h.S.ListStackPicks(proj.ID)
+	runtime := runtimeOptionID(picks)
+	var current store.StackPick
+	for _, p := range picks {
+		if p.Slot == slotKey {
+			current = p
+			break
+		}
+	}
+	// For the runtime slot itself, don't filter by runtime
+	filterRuntime := runtime
+	if slotKey == "runtime" {
+		filterRuntime = ""
+	}
+	options := stack.OptionsForSlot(slotKey, filterRuntime)
+	// also include options NOT compatible with current runtime but only for non-runtime slots
+	if slotKey != "runtime" && runtime != "" {
+		all := stack.OptionsForSlot(slotKey, "")
+		seen := make(map[string]bool, len(options))
+		for _, o := range options {
+			seen[o.ID] = true
+		}
+		for _, o := range all {
+			if !seen[o.ID] {
+				options = append(options, o)
+			}
+		}
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	_ = h.R.RenderPartial(w, "stack_popover", stackPopoverData{
+		ProjectID: proj.ID,
+		Slot:      slot,
+		Current:   current,
+		Options:   options,
+		Runtime:   runtime,
+	})
+}
+
+func (h *Handler) stackUpsert(w http.ResponseWriter, r *http.Request, proj *store.Project) {
+	slotKey := r.FormValue("slot")
+	if _, ok := stack.SlotByKey(slotKey); !ok {
+		http.Error(w, "bad slot", 400)
+		return
+	}
+	optionID := strings.TrimSpace(r.FormValue("option_id"))
+	freeText := strings.TrimSpace(r.FormValue("free_text"))
+	version := strings.TrimSpace(r.FormValue("version"))
+	note := strings.TrimSpace(r.FormValue("note"))
+
+	// blank both = clear
+	if optionID == "" && freeText == "" && version == "" && note == "" {
+		_ = h.S.ClearStackSlot(proj.ID, slotKey)
+	} else {
+		if optionID != "" {
+			if _, ok := stack.OptionByID(optionID); !ok {
+				http.Error(w, "bad option", 400)
+				return
+			}
+		}
+		_ = h.S.UpsertStackPick(store.StackPick{
+			ProjectID: proj.ID, Slot: slotKey,
+			OptionID: optionID, FreeText: freeText, Version: version, Note: note,
+		})
+	}
+	h.renderStackPanel(w, proj)
+}
+
+func (h *Handler) stackClear(w http.ResponseWriter, r *http.Request, proj *store.Project) {
+	slotKey := r.URL.Query().Get("slot")
+	if slotKey == "" {
+		slotKey = r.FormValue("slot")
+	}
+	if _, ok := stack.SlotByKey(slotKey); !ok {
+		http.Error(w, "bad slot", 400)
+		return
+	}
+	_ = h.S.ClearStackSlot(proj.ID, slotKey)
+	h.renderStackPanel(w, proj)
+}
+
+func (h *Handler) stackApplyPreset(w http.ResponseWriter, r *http.Request, proj *store.Project) {
+	presetID := r.FormValue("preset_id")
+	if presetID == "" {
+		_ = h.S.SetProjectStackPreset(proj.ID, "")
+		proj.StackPreset = ""
+		h.renderStackPanel(w, proj)
+		return
+	}
+	preset, ok := stack.PresetByID(presetID)
+	if !ok {
+		http.Error(w, "bad preset", 400)
+		return
+	}
+	for slotKey, optID := range preset.Picks {
+		ver := preset.Versions[slotKey]
+		_ = h.S.UpsertStackPick(store.StackPick{
+			ProjectID: proj.ID, Slot: slotKey, OptionID: optID, Version: ver,
+		})
+	}
+	_ = h.S.SetProjectStackPreset(proj.ID, presetID)
+	proj.StackPreset = presetID
+	h.renderStackPanel(w, proj)
+}
+
+type chipData struct {
+	SlotKey   string
+	SlotLabel string
+	Value     string
+	Version   string
+	Empty     bool
+	Incompat  bool
+}
+
+type stackPanelData struct {
+	ProjectID int64
+	PresetID  string
+	Chips     []chipData
+	Incompats []string
+	Presets   []stack.Preset
+}
+
+type stackPopoverData struct {
+	ProjectID int64
+	Slot      stack.Slot
+	Current   store.StackPick
+	Options   []stack.Option
+	Runtime   string
+}
+
+func runtimeOptionID(picks []store.StackPick) string {
+	for _, p := range picks {
+		if p.Slot == "runtime" {
+			return p.OptionID
+		}
+	}
+	return ""
+}
+
+func picksToCatalog(picks []store.StackPick) []stack.Pick {
+	out := make([]stack.Pick, 0, len(picks))
+	for _, p := range picks {
+		out = append(out, stack.Pick{
+			Slot:     p.Slot,
+			OptionID: p.OptionID,
+			FreeText: p.FreeText,
+			Version:  p.Version,
+			Note:     p.Note,
+		})
+	}
+	return out
+}
+
+func (h *Handler) buildStackPanelData(proj *store.Project) stackPanelData {
+	picks, _ := h.S.ListStackPicks(proj.ID)
+	runtime := runtimeOptionID(picks)
+	incompats := stack.IncompatibleSlots(picksToCatalog(picks), runtime)
+	incompatSet := make(map[string]bool, len(incompats))
+	for _, s := range incompats {
+		incompatSet[s] = true
+	}
+	chips := make([]chipData, 0, len(stack.Slots))
+	for _, s := range stack.Slots {
+		c := chipData{SlotKey: s.Key, SlotLabel: s.Label, Empty: true}
+		for _, p := range picks {
+			if p.Slot != s.Key {
+				continue
+			}
+			c.Empty = false
+			c.Version = p.Version
+			if p.OptionID != "" {
+				if o, ok := stack.OptionByID(p.OptionID); ok {
+					c.Value = o.Label
+				} else {
+					c.Value = p.OptionID
+				}
+			} else if p.FreeText != "" {
+				c.Value = p.FreeText
+			} else {
+				c.Empty = true
+			}
+			break
+		}
+		if incompatSet[s.Key] {
+			c.Incompat = true
+		}
+		chips = append(chips, c)
+	}
+	return stackPanelData{
+		ProjectID: proj.ID,
+		PresetID:  proj.StackPreset,
+		Chips:     chips,
+		Incompats: incompats,
+		Presets:   stack.Presets,
+	}
+}
+
+func (h *Handler) stackContext(projectID int64) string {
+	picks, err := h.S.ListStackPicks(projectID)
+	if err != nil || len(picks) == 0 {
+		return ""
+	}
+	return stack.FormatForPrompt(picksToCatalog(picks))
 }
 
 func (h *Handler) streamBrief(w http.ResponseWriter, r *http.Request, proj *store.Project) {
@@ -442,7 +733,7 @@ func (h *Handler) streamCritique(w http.ResponseWriter, r *http.Request, proj *s
 	ctx, cancel := context.WithTimeout(r.Context(), 240*time.Second)
 	defer cancel()
 
-	userPrompt := fmt.Sprintf("Project: %s\n\nDesign doc:\n\n%s", proj.Title, proj.DesignDoc)
+	userPrompt := h.stackContext(proj.ID) + fmt.Sprintf("Project: %s\n\nDesign doc:\n\n%s", proj.Title, proj.DesignDoc)
 	runID, _ := h.S.StartRun(sql.NullInt64{}, sql.NullInt64{Int64: proj.ID, Valid: true}, "critique", userPrompt)
 	res, err := h.LLM.CompleteStream(ctx, llm.ModelProKey, systemCritiquePrompt, userPrompt,
 		func(chunk string) { writeSSE(w, flusher, "delta", chunk) })
@@ -477,7 +768,7 @@ func (h *Handler) streamApplyCritique(w http.ResponseWriter, r *http.Request, pr
 	ctx, cancel := context.WithTimeout(r.Context(), 240*time.Second)
 	defer cancel()
 
-	userPrompt := fmt.Sprintf("Project: %s\n\nExisting design doc:\n\n%s\n\nCritique to address:\n\n%s\n\nProduce a revised design doc that addresses each numbered point in the critique. Preserve sections that the critique didn't flag.",
+	userPrompt := h.stackContext(proj.ID) + fmt.Sprintf("Project: %s\n\nExisting design doc:\n\n%s\n\nCritique to address:\n\n%s\n\nProduce a revised design doc that addresses each numbered point in the critique. Preserve sections that the critique didn't flag.",
 		proj.Title, proj.DesignDoc, crit.Body)
 	runID, _ := h.S.StartRun(sql.NullInt64{}, sql.NullInt64{Int64: proj.ID, Valid: true}, "apply-critique", userPrompt)
 	res, err := h.LLM.CompleteStream(ctx, llm.ModelProKey, systemDesignDocPrompt, userPrompt,
@@ -510,7 +801,7 @@ func (h *Handler) streamDraft(w http.ResponseWriter, r *http.Request, proj *stor
 	w.Header().Set("X-Accel-Buffering", "no")
 	w.WriteHeader(200)
 
-	userPrompt := fmt.Sprintf("Project title: %s\nSummary: %s\n\nExisting doc (may be empty):\n%s\n\nProduce or refine the design doc.",
+	userPrompt := h.stackContext(proj.ID) + fmt.Sprintf("Project title: %s\nSummary: %s\n\nExisting doc (may be empty):\n%s\n\nProduce or refine the design doc.",
 		proj.Title, proj.Summary, proj.DesignDoc)
 	runID, _ := h.S.StartRun(sql.NullInt64{}, sql.NullInt64{Int64: proj.ID, Valid: true}, "project-draft", userPrompt)
 
@@ -595,7 +886,7 @@ func (h *Handler) agentActions(w http.ResponseWriter, r *http.Request) {
 		if agent.ProjectID.Valid {
 			projID = agent.ProjectID
 			if proj, err := h.S.GetProject(agent.ProjectID.Int64); err == nil {
-				userPrompt = fmt.Sprintf(
+				userPrompt = h.stackContext(proj.ID) + fmt.Sprintf(
 					"Run mission for project %q. Purpose: %s.\n\nLive design doc:\n\n%s\n\nProduce a structured report.",
 					proj.Title, agent.Purpose, proj.DesignDoc,
 				)
@@ -775,7 +1066,7 @@ func (h *Handler) boardSynthesize(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 180*time.Second)
 	defer cancel()
 	userPrompt := fmt.Sprintf(
-		"Two ideas have been selected for synthesis. Produce a single design doc that combines them — the goal is to find the unified project that subsumes both, not to merge them mechanically.\n\nIdea A (#%d): %s\n%s\n\nIdea B (#%d): %s\n%s",
+		"Two ideas have been selected for synthesis. Produce a single design doc that combines them — the goal is to find the unified project that subsumes both, not to merge them mechanically.\n\nIdea A (#%d): %s\n%s\n\nIdea B (#%d): %s\n%s\n\nThis is a fresh project with no chosen tech stack yet. In the Open questions section, list the load-bearing stack choices the author will need to make (runtime/framework/storage/deploy) — frame them as concrete trade-offs given what the ideas imply, not as a generic checklist.",
 		a.ID, a.Title, a.Body, b.ID, b.Title, b.Body,
 	)
 	runID, _ := h.S.StartRun(sql.NullInt64{}, sql.NullInt64{Int64: pid, Valid: true}, "synthesize", userPrompt)

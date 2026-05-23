@@ -8,15 +8,16 @@ import (
 )
 
 type Config struct {
-	DeepSeekAPIKey   string
-	DeepSeekBaseURL  string
-	ModelFlash       string
-	ModelPro         string
-	Port             string
-	DBPath           string
-	WorkspaceDir     string
-	TemplatesDir     string
-	StaticDir        string
+	DeepSeekAPIKey  string
+	DeepSeekBaseURL string
+	ModelFlash      string
+	ModelPro        string
+	Host            string
+	Port            string
+	DBPath          string
+	WorkspaceDir    string
+	TemplatesDir    string
+	StaticDir       string
 }
 
 func Load() (*Config, error) {
@@ -27,6 +28,7 @@ func Load() (*Config, error) {
 		DeepSeekBaseURL: getenvDefault("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1"),
 		ModelFlash:      getenvDefault("DEEPSEEK_MODEL_FLASH", "deepseek-v4-flash"),
 		ModelPro:        getenvDefault("DEEPSEEK_MODEL_PRO", "deepseek-v4-pro"),
+		Host:            getenvDefault("HOST", "0.0.0.0"),
 		Port:            getenvDefault("PORT", "8080"),
 		DBPath:          getenvDefault("DB_PATH", "projectpat.db"),
 		WorkspaceDir:    getenvDefault("WORKSPACE_DIR", "workspace"),

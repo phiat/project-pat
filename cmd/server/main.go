@@ -51,13 +51,18 @@ func main() {
 	}
 	defer sc.Stop()
 
+	addr := cfg.Host + ":" + cfg.Port
 	srv := &http.Server{
-		Addr:              ":" + cfg.Port,
+		Addr:              addr,
 		Handler:           withLogging(mux),
 		ReadHeaderTimeout: 15 * time.Second,
 	}
 	go func() {
-		log.Printf("listening on http://localhost:%s", cfg.Port)
+		shown := cfg.Host
+		if shown == "0.0.0.0" || shown == "" {
+			shown = "0.0.0.0 (all interfaces) — also reachable at http://localhost:" + cfg.Port + " and on the LAN"
+		}
+		log.Printf("listening on %s:%s · %s", cfg.Host, cfg.Port, shown)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("server: %v", err)
 		}
