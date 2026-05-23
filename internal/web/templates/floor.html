@@ -1,0 +1,18 @@
+{{define "content"}}
+<section class="page-head">
+  <div class="page-head-left">
+    <h1>workshop floor</h1>
+    <p class="muted">every project at a glance, ranked by what's asking for your attention. tiles re-rank every 60s.</p>
+  </div>
+  <div class="page-head-right">
+    <span class="muted" id="floor-pulse">live</span>
+  </div>
+</section>
+
+<section id="floor-tiles"
+         hx-get="/floor/tiles"
+         hx-trigger="every 60s"
+         hx-swap="innerHTML">
+  {{template "floor_tiles" .}}
+</section>
+{{end}}

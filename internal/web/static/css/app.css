@@ -509,3 +509,78 @@ button:hover { filter: brightness(1.1); }
   font-size: 12px;
   border-top: 1px solid var(--c-border);
 }
+
+/* ---- workshop floor ---- */
+.floor-grid { margin-top: 6px; }
+.floor-tile {
+  gap: 10px;
+  position: relative;
+  min-height: 180px;
+}
+.floor-tile-warm { border-color: rgba(170, 174, 127, 0.45); }
+.floor-tile-hot  { border-color: rgba(65, 97, 156, 0.65); box-shadow: 0 0 0 1px rgba(65, 97, 156, 0.18) inset; }
+.floor-tile h3 { margin: 0; font-size: 16px; }
+.floor-tile h3 a { color: var(--c-snow); }
+.floor-tile h3 a:hover { color: var(--c-blue); }
+.floor-tile-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 8px;
+}
+.floor-tile-head .card-eyebrow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  letter-spacing: 0.4px;
+}
+.floor-score {
+  font-family: ui-monospace, monospace;
+  font-size: 11px;
+  letter-spacing: 0.5px;
+  color: var(--c-sage);
+}
+.floor-last {
+  font-size: 13px;
+  color: var(--c-beige);
+  line-height: 1.5;
+  margin: 0;
+}
+.floor-decision {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 12px;
+  background: rgba(13, 34, 8, 0.45);
+  border: 1px dashed var(--c-border);
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+.floor-decision-tag {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  color: var(--c-sage);
+}
+.floor-decision-q { color: var(--c-snow); }
+.floor-decision-a { color: var(--c-beige); }
+.floor-tile-foot {
+  margin-top: auto;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  padding-top: 4px;
+}
+.floor-action {
+  font-size: 12.5px;
+  padding: 7px 12px;
+  border-radius: 8px;
+  text-decoration: none;
+  display: inline-block;
+}
+.floor-action.btn-primary { background: var(--c-blue); color: var(--c-snow); border: 1px solid transparent; }
+.floor-action.btn-ghost   { background: transparent; color: var(--c-beige); border: 1px solid var(--c-border); }
+.floor-action.btn-ghost:hover  { border-color: var(--c-blue); color: var(--c-snow); }
+.floor-action.btn-primary:hover { filter: brightness(1.1); }

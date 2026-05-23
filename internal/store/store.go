@@ -704,6 +704,34 @@ func (s *Store) ListIdeaLinks() ([]IdeaLink, error) {
 	return out, rows.Err()
 }
 
+// UnreadInboxCountForProject counts unread inbox items whose run is tied
+// to the given project — either directly (runs.project_id) or indirectly
+// (the run's agent is scoped to the project).
+func (s *Store) UnreadInboxCountForProject(projectID int64) (int, error) {
+	var n int
+	err := s.DB.QueryRow(`
+        SELECT COUNT(*) FROM inbox_items i
+        JOIN runs r ON r.id = i.run_id
+        LEFT JOIN agents a ON a.id = r.agent_id
+        WHERE i.read_at IS NULL
+          AND (r.project_id = ? OR a.project_id = ?)`, projectID, projectID).Scan(&n)
+	return n, err
+}
+
+// CritiquePending reports whether a critique exists that is newer than
+// the project's last design-doc update — i.e. a critique that has not
+// yet been folded back in via apply-critique / re-draft.
+func (s *Store) CritiquePending(projectID int64) (bool, error) {
+	var n int
+	err := s.DB.QueryRow(`
+        SELECT COUNT(*) FROM artifacts a
+        JOIN projects p ON p.id = a.project_id
+        WHERE a.kind = 'critique'
+          AND a.project_id = ?
+          AND a.created_at > p.updated_at`, projectID).Scan(&n)
+	return n > 0, err
+}
+
 // PreviousRunOutput returns the output of the most recent prior successful
 // run by the same agent, or "" if none. Used for inbox diff.
 func (s *Store) PreviousRunOutput(agentID, beforeRunID int64) (string, error) {

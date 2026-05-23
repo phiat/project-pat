@@ -1,0 +1,40 @@
+{{define "floor_tiles"}}
+{{if .Tiles}}
+<div class="grid grid-2 floor-grid">
+  {{range .Tiles}}
+  <article class="card floor-tile{{if gt .UnreadInbox 0}} floor-tile-hot{{else if .CritiquePending}} floor-tile-warm{{end}}">
+    <header class="floor-tile-head">
+      <div class="card-eyebrow">
+        {{statusPill .Project.Status}}
+        {{if .CritiquePending}}<span class="pill pill-active">critique pending</span>{{end}}
+        {{if gt .UnreadInbox 0}}<span class="pill pill-active">inbox · {{.UnreadInbox}}</span>{{end}}
+      </div>
+      <span class="muted floor-score" title="attention score">a{{printf "%.0f" .AttentionScore}}</span>
+    </header>
+    <h3><a href="/projects/{{.Project.ID}}">{{.Project.Title}}</a></h3>
+    {{if .LastPara}}
+      <p class="floor-last">{{.LastPara}}</p>
+    {{else}}
+      <p class="floor-last muted">no design doc yet.</p>
+    {{end}}
+    {{if .LastDecision}}
+    <div class="floor-decision">
+      <span class="floor-decision-tag">last decision</span>
+      <span class="floor-decision-q">{{truncate .LastDecision.Title 90}}</span>
+      <span class="floor-decision-a">→ {{truncate .LastDecision.Body 110}}</span>
+    </div>
+    {{end}}
+    <footer class="floor-tile-foot">
+      <span class="card-stat muted">
+        updated {{date .Project.UpdatedAt}}
+        {{if gt .StaleHours 24}} · {{.StaleHours}}h stale{{end}}
+      </span>
+      <a class="{{.Action.Class}} floor-action" href="{{.Action.Href}}">{{.Action.Label}}</a>
+    </footer>
+  </article>
+  {{end}}
+</div>
+{{else}}
+<p class="muted">no projects on the floor. start one from <a href="/projects">projects</a> or <a href="/ideas">ideas</a>.</p>
+{{end}}
+{{end}}

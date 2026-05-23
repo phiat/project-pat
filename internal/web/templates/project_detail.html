@@ -51,6 +51,85 @@
   <textarea hidden class="copy-source" id="copy-src-crit" readonly>{{with $.Critique}}{{.Body}}{{end}}</textarea>
 </section>
 
+<section class="panel" id="devil-panel">
+  <header class="panel-head">
+    <h2>devil's office hours</h2>
+    <div>
+      <button id="summon-devil-btn" class="btn-ghost" type="button">summon (pro)</button>
+      <span id="devil-spin" class="muted" hidden>thinking…</span>
+    </div>
+  </header>
+  <article id="devil-question" class="doc" aria-live="polite">
+    {{if $.Decisions}}<p class="muted">{{len $.Decisions}} decision(s) on record. summon for another.</p>{{else}}<p class="muted">no questions yet. summon to be asked one sharp thing.</p>{{end}}
+  </article>
+  <form id="devil-answer-form" hidden>
+    <input type="hidden" name="question" id="devil-question-raw">
+    <textarea name="answer" placeholder="commit to an answer (≤280 chars)" maxlength="280" rows="2" required></textarea>
+    <div class="ctrl-row">
+      <button class="btn-primary" type="submit">commit decision</button>
+      <button class="btn-ghost" type="button" id="devil-dismiss">dismiss</button>
+    </div>
+  </form>
+  {{if $.Decisions}}
+  <details class="decisions-log">
+    <summary class="muted">decision log ({{len $.Decisions}})</summary>
+    <ul class="stack" style="margin-top:8px">
+      {{range $.Decisions}}
+      <li class="row">
+        <div class="row-main">
+          <div class="row-title">{{.Title}}</div>
+          <div class="row-sub">→ {{.Body}}</div>
+        </div>
+        <div class="row-actions"><span class="muted">{{date .CreatedAt}}</span></div>
+      </li>
+      {{end}}
+    </ul>
+  </details>
+  {{end}}
+</section>
+<script>
+(() => {
+  const summon = document.getElementById("summon-devil-btn");
+  const qDiv   = document.getElementById("devil-question");
+  const aForm  = document.getElementById("devil-answer-form");
+  const qRaw   = document.getElementById("devil-question-raw");
+  const dismiss = document.getElementById("devil-dismiss");
+  const spin   = document.getElementById("devil-spin");
+  const projectId = {{.Project.ID}};
+  let busy = false;
+  summon.addEventListener("click", async () => {
+    if (busy) return; busy = true;
+    summon.disabled = true; spin.hidden = false;
+    aForm.hidden = true;
+    qDiv.innerHTML = `<pre class="stream-pre" aria-live="polite"></pre>`;
+    const pre = qDiv.querySelector(".stream-pre");
+    let finalHTML = null;
+    const r = await window.streamSSE(`/projects/${projectId}/devil`, new FormData(), {
+      onDelta: (t) => { pre.textContent += t; },
+      onEnd:   (html) => { finalHTML = html; },
+      onError: (msg) => { qDiv.innerHTML = `<p class="err">${window.escapeHTML(msg)}</p>`; },
+    });
+    spin.hidden = true; summon.disabled = false; busy = false;
+    if (r.ok && finalHTML) {
+      qDiv.innerHTML = finalHTML;
+      qRaw.value = r.accumulated.trim();
+      aForm.hidden = false;
+      aForm.querySelector("textarea").focus();
+    }
+  });
+  dismiss.addEventListener("click", () => {
+    aForm.hidden = true;
+    qDiv.innerHTML = `<p class="muted">dismissed. summon again when you're ready to commit.</p>`;
+  });
+  aForm.addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    const res = await fetch(`/projects/${projectId}/decisions`, { method: "POST", body: new FormData(aForm) });
+    if (res.ok) window.location.reload();
+    else qDiv.innerHTML = `<p class="err">commit failed (${res.status})</p>`;
+  });
+})();
+</script>
+
 <section class="panel" id="brief-panel">
   <header class="panel-head">
     <h2>research brief</h2>

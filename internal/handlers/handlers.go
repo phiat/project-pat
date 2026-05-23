@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"html/template"
 	"log"
+	"math"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -53,6 +55,8 @@ func (h *Handler) Mount(mux *http.ServeMux) {
 	mux.HandleFunc("/board/cluster", h.boardCluster)
 	mux.HandleFunc("/board/synthesize", h.boardSynthesize)
 	mux.HandleFunc("/board/data", h.boardData)
+	mux.HandleFunc("/floor", h.floor)
+	mux.HandleFunc("/floor/tiles", h.floorTiles)
 }
 
 func (h *Handler) home(w http.ResponseWriter, r *http.Request) {
@@ -238,6 +242,7 @@ func (h *Handler) projectActions(w http.ResponseWriter, r *http.Request) {
 		if brief != nil {
 			briefItems, _ = h.S.ListBriefItems(brief.ID)
 		}
+		decisions, _ := h.S.ListArtifacts(proj.ID, "decision")
 		stackData := h.buildStackPanelData(proj)
 		h.render(w, "project_detail", map[string]any{
 			"Title":      proj.Title,
@@ -247,6 +252,7 @@ func (h *Handler) projectActions(w http.ResponseWriter, r *http.Request) {
 			"Timeline":   timeline,
 			"Brief":      brief,
 			"BriefItems": briefItems,
+			"Decisions":  decisions,
 			"Stack":      stackData,
 		})
 		return
@@ -270,6 +276,12 @@ func (h *Handler) projectActions(w http.ResponseWriter, r *http.Request) {
 			return
 		case "stack":
 			h.stackUpsert(w, r, proj)
+			return
+		case "devil":
+			h.streamDevil(w, r, proj)
+			return
+		case "decisions":
+			h.commitDecision(w, r, proj)
 			return
 		}
 	}
@@ -561,6 +573,75 @@ func (h *Handler) stackContext(projectID int64) string {
 	return stack.FormatForPrompt(picksToCatalog(picks))
 }
 
+// ---- devil's office hours ----
+
+func (h *Handler) streamDevil(w http.ResponseWriter, r *http.Request, proj *store.Project) {
+	decisions, _ := h.S.ListArtifacts(proj.ID, "decision")
+	critique, _ := h.S.LatestArtifact(proj.ID, "critique")
+	var critBody string
+	if critique != nil {
+		critBody = critique.Body
+	}
+	user := fmt.Sprintf(
+		"Project: %s\nSummary: %s\n\nDesign doc:\n%s\n\nLatest critique:\n%s\n\nResolved decisions so far:\n%s",
+		proj.Title, proj.Summary, proj.DesignDoc, critBody, formatDecisionsList(decisions),
+	)
+	h.streamSSE(w, r, streamSpec{
+		trigger:   "devil",
+		projectID: sql.NullInt64{Int64: proj.ID, Valid: true},
+		modelKey:  llm.ModelProKey,
+		system:    systemDevilPrompt,
+		user:      user,
+		timeout:   90 * time.Second,
+	})
+}
+
+func (h *Handler) commitDecision(w http.ResponseWriter, r *http.Request, proj *store.Project) {
+	question := strings.TrimSpace(r.FormValue("question"))
+	answer := strings.TrimSpace(r.FormValue("answer"))
+	if question == "" || answer == "" {
+		http.Error(w, "question and answer required", 400)
+		return
+	}
+	if _, err := h.S.CreateArtifact(store.Artifact{
+		ProjectID: proj.ID, Kind: "decision", Title: question, Body: answer,
+	}); err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	w.Header().Set("HX-Refresh", "true")
+	w.WriteHeader(204)
+}
+
+func formatDecisionsList(decisions []store.Artifact) string {
+	if len(decisions) == 0 {
+		return "(none yet)"
+	}
+	var b strings.Builder
+	for _, d := range decisions {
+		fmt.Fprintf(&b, "- Q: %s\n  A: %s\n", oneLine(d.Title), oneLine(d.Body))
+	}
+	return b.String()
+}
+
+func oneLine(s string) string {
+	return strings.ReplaceAll(strings.ReplaceAll(s, "\r", " "), "\n", " ")
+}
+
+func (h *Handler) decisionsContext(projectID int64) string {
+	decs, err := h.S.ListArtifacts(projectID, "decision")
+	if err != nil || len(decs) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("Resolved decisions (do not relitigate; treat as load-bearing context):\n")
+	for _, d := range decs {
+		fmt.Fprintf(&b, "- %s → %s\n", oneLine(d.Title), oneLine(d.Body))
+	}
+	b.WriteString("\n")
+	return b.String()
+}
+
 func (h *Handler) streamBrief(w http.ResponseWriter, r *http.Request, proj *store.Project) {
 	topic := strings.TrimSpace(r.FormValue("topic"))
 	if topic == "" {
@@ -702,7 +783,7 @@ func (h *Handler) streamCritique(w http.ResponseWriter, r *http.Request, proj *s
 		return
 	}
 	focus := strings.TrimSpace(r.FormValue("focus"))
-	userPrompt := h.stackContext(proj.ID) + fmt.Sprintf("Project: %s\n\nDesign doc:\n\n%s", proj.Title, proj.DesignDoc)
+	userPrompt := h.stackContext(proj.ID) + h.decisionsContext(proj.ID) + fmt.Sprintf("Project: %s\n\nDesign doc:\n\n%s", proj.Title, proj.DesignDoc)
 	if focus != "" {
 		userPrompt += "\n\nFocus this critique on: " + focus
 	}
@@ -729,7 +810,7 @@ func (h *Handler) streamApplyCritique(w http.ResponseWriter, r *http.Request, pr
 		return
 	}
 	focus := strings.TrimSpace(r.FormValue("focus"))
-	userPrompt := h.stackContext(proj.ID) + fmt.Sprintf("Project: %s\n\nExisting design doc:\n\n%s\n\nCritique to address:\n\n%s\n\nProduce a revised design doc that addresses each numbered point in the critique. Preserve sections that the critique didn't flag.",
+	userPrompt := h.stackContext(proj.ID) + h.decisionsContext(proj.ID) + fmt.Sprintf("Project: %s\n\nExisting design doc:\n\n%s\n\nCritique to address:\n\n%s\n\nProduce a revised design doc that addresses each numbered point in the critique. Preserve sections that the critique didn't flag.",
 		proj.Title, proj.DesignDoc, crit.Body)
 	if focus != "" {
 		userPrompt += "\n\nWhile applying the critique, prioritise: " + focus
@@ -757,7 +838,7 @@ func (h *Handler) streamDraft(w http.ResponseWriter, r *http.Request, proj *stor
 	}
 	focus := strings.TrimSpace(r.FormValue("focus"))
 
-	userPrompt := h.stackContext(proj.ID) + fmt.Sprintf("Project title: %s\nSummary: %s\n\nExisting doc (may be empty):\n%s\n\nProduce or refine the design doc.",
+	userPrompt := h.stackContext(proj.ID) + h.decisionsContext(proj.ID) + fmt.Sprintf("Project title: %s\nSummary: %s\n\nExisting doc (may be empty):\n%s\n\nProduce or refine the design doc.",
 		proj.Title, proj.Summary, proj.DesignDoc)
 	if focus != "" {
 		userPrompt += "\n\nFocus this pass on: " + focus
@@ -1205,6 +1286,165 @@ func extractFirstObject(text string) string {
 	return ""
 }
 
+// ---- workshop floor ----
+
+type floorTile struct {
+	Project         store.Project
+	LastPara        string
+	LastDecision    *store.Artifact
+	UnreadInbox     int
+	CritiquePending bool
+	StaleHours      int
+	AttentionScore  float64
+	Action          tileAction
+}
+
+type tileAction struct {
+	Label string
+	Href  string
+	Class string
+}
+
+func (h *Handler) floor(w http.ResponseWriter, r *http.Request) {
+	tiles := h.buildFloorTiles()
+	h.render(w, "floor", map[string]any{
+		"Title": "workshop floor",
+		"Tiles": tiles,
+	})
+}
+
+func (h *Handler) floorTiles(w http.ResponseWriter, r *http.Request) {
+	tiles := h.buildFloorTiles()
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if err := h.R.RenderPartial(w, "floor_tiles", map[string]any{"Tiles": tiles}); err != nil {
+		log.Printf("render floor_tiles: %v", err)
+		http.Error(w, "render", 500)
+	}
+}
+
+func (h *Handler) buildFloorTiles() []floorTile {
+	projs, err := h.S.ListProjects()
+	if err != nil {
+		log.Printf("floor: list projects: %v", err)
+		return nil
+	}
+	now := time.Now()
+	tiles := make([]floorTile, 0, len(projs))
+	for _, p := range projs {
+		t := floorTile{Project: p}
+		t.LastPara = lastParagraph(p.DesignDoc, 240)
+		if decs, _ := h.S.ListArtifacts(p.ID, "decision"); len(decs) > 0 {
+			d := decs[0]
+			t.LastDecision = &d
+		}
+		if n, err := h.S.UnreadInboxCountForProject(p.ID); err == nil {
+			t.UnreadInbox = n
+		}
+		if cp, err := h.S.CritiquePending(p.ID); err == nil {
+			t.CritiquePending = cp
+		}
+		t.StaleHours = int(now.Sub(p.UpdatedAt).Hours())
+		t.AttentionScore = computeAttention(p, t, now)
+		t.Action = pickAction(p, t)
+		tiles = append(tiles, t)
+	}
+	sort.SliceStable(tiles, func(i, j int) bool {
+		if tiles[i].AttentionScore != tiles[j].AttentionScore {
+			return tiles[i].AttentionScore > tiles[j].AttentionScore
+		}
+		return tiles[i].Project.UpdatedAt.After(tiles[j].Project.UpdatedAt)
+	})
+	return tiles
+}
+
+// computeAttention scores how much a project is asking for the user's
+// time right now. Higher = more urgent.
+func computeAttention(p store.Project, t floorTile, now time.Time) float64 {
+	score := 0.0
+	if strings.TrimSpace(p.DesignDoc) == "" {
+		score += 30
+	}
+	if t.CritiquePending {
+		score += 25
+	}
+	if t.UnreadInbox > 0 {
+		score += math.Min(float64(t.UnreadInbox)*8, 24)
+	}
+	if p.DesignDoc != "" && t.LastDecision == nil {
+		score += 6
+	}
+	ageHours := now.Sub(p.UpdatedAt).Hours()
+	if ageHours > 24 {
+		score += math.Min((ageHours-24)/12, 10)
+	}
+	switch p.Status {
+	case "drafting":
+		score += 2
+	case "shipped", "archived", "done":
+		score -= 15
+	}
+	return score
+}
+
+func pickAction(p store.Project, t floorTile) tileAction {
+	href := fmt.Sprintf("/projects/%d", p.ID)
+	switch {
+	case t.UnreadInbox > 0:
+		return tileAction{
+			Label: fmt.Sprintf("inbox · %d unread", t.UnreadInbox),
+			Href:  "/inbox?filter=unread",
+			Class: "btn-primary",
+		}
+	case t.CritiquePending:
+		return tileAction{Label: "apply critique →", Href: href + "#critique-panel", Class: "btn-primary"}
+	case strings.TrimSpace(p.DesignDoc) == "":
+		return tileAction{Label: "draft doc", Href: href, Class: "btn-primary"}
+	case t.LastDecision == nil:
+		return tileAction{Label: "summon devil", Href: href + "#devil-panel", Class: "btn-ghost"}
+	default:
+		return tileAction{Label: "open", Href: href, Class: "btn-ghost"}
+	}
+}
+
+// lastParagraph plucks the last non-empty paragraph from a markdown doc,
+// stripping leading header / bullet markers so the floor tile shows
+// readable prose rather than a section title.
+func lastParagraph(doc string, limit int) string {
+	doc = strings.TrimSpace(doc)
+	if doc == "" {
+		return ""
+	}
+	parts := strings.Split(doc, "\n\n")
+	for i := len(parts) - 1; i >= 0; i-- {
+		candidate := stripLeadMarkdown(strings.TrimSpace(parts[i]))
+		if candidate == "" {
+			continue
+		}
+		candidate = strings.ReplaceAll(candidate, "\n", " ")
+		if len(candidate) > limit {
+			candidate = candidate[:limit] + "…"
+		}
+		return candidate
+	}
+	return ""
+}
+
+func stripLeadMarkdown(s string) string {
+	for {
+		s = strings.TrimSpace(s)
+		switch {
+		case strings.HasPrefix(s, "#"):
+			s = strings.TrimLeft(s, "#")
+		case strings.HasPrefix(s, "- "), strings.HasPrefix(s, "* "), strings.HasPrefix(s, "+ "):
+			s = s[2:]
+		case strings.HasPrefix(s, ">"):
+			s = strings.TrimLeft(s, ">")
+		default:
+			return s
+		}
+	}
+}
+
 // ---- inbox ----
 
 func (h *Handler) inbox(w http.ResponseWriter, r *http.Request) {
@@ -1376,6 +1616,18 @@ Numbered list. 3-6 honest "I don't know" questions the author should resolve bef
 Bulleted list (use '-'). Each line: a concrete thing to read or watch — paper title, blog post, talk, RFC, source-code module — followed by a 5-15 word reason. Prefer foundational references over recency. 4-10 items. One per line, no nested sub-bullets.
 
 Do not invent URLs you don't know exist. If you don't know a canonical reference, describe what to search for instead (e.g. "Original Raft paper by Ongaro & Ousterhout").`
+
+const systemDevilPrompt = `You are "the devil" — a forceful interlocutor reading a project's design doc, latest critique, and the user's prior resolved decisions. Your only job is to ask ONE sharp question that forces the user to commit to a specific decision they've been deferring or quietly avoiding.
+
+Rules:
+- One question. No preamble, no critique, no "I noticed…", no options unless naming them is the question.
+- Phrased to demand a concrete answer — ideally binary, trinary, or "under N chars". Make it hard to weasel out of.
+- Under 220 characters total.
+- Reference specific text from the doc or critique when possible ("you keep saying X — pick Y or Z").
+- Be curt. The user opted into pressure.
+- NEVER repeat a question that's already a resolved decision in the list.
+
+Output the question alone, no quotes, no formatting.`
 
 const systemClustererPrompt = `You are clustering a user's open ideas to surface hidden adjacencies.
 
