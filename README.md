@@ -43,10 +43,17 @@ All LLM endpoints stream over SSE; the UI shows tokens arriving in real-time, th
 ```bash
 mise install                # installs a Go toolchain per mise.toml (or use any Go ≥ 1.26 directly)
 go mod tidy
-go run ./cmd/server
+go run ./cmd/pat server
 ```
 
 Then open <http://localhost:8080>.
+
+There's also a CLI / REPL over the same DB — run `go run ./cmd/pat help` for the full list. Highlights:
+```
+pat ideas add "title" [body]    pat projects list [--archived]    pat projects materialize <id>
+pat agents run <id>             pat inbox list [--unread]         pat repl
+```
+SQLite WAL lets the CLI and the server share the same db file safely.
 
 Required `.env`:
 ```
@@ -97,7 +104,7 @@ Per-tier knob: `off | minimal | low | medium | high`. Mapped to `reasoning_effor
 ## layout
 
 ```
-cmd/server/main.go                   wires everything
+cmd/pat/                             single binary — `server`, `repl`, plus subcommands
 internal/
   config/      .env loader + paths
   db/          sqlite open + migrations

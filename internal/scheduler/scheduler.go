@@ -3,7 +3,6 @@ package scheduler
 import (
 	"context"
 	"database/sql"
-	"fmt"
 	"log"
 	"strings"
 	"sync"
@@ -12,7 +11,7 @@ import (
 	"github.com/robfig/cron/v3"
 
 	"projectpat/internal/llm"
-	"projectpat/internal/stack"
+	"projectpat/internal/prompts"
 	"projectpat/internal/store"
 )
 
@@ -140,18 +139,10 @@ func (sc *Scheduler) runAgent(a store.Agent) {
 	defer cancel()
 
 	var projID sql.NullInt64
-	userPrompt := fmt.Sprintf("Scheduled mission. Purpose: %s. Produce a concise structured report.", a.Purpose)
 	if a.ProjectID.Valid {
 		projID = a.ProjectID
-		if proj, err := sc.store.GetProject(a.ProjectID.Int64); err == nil {
-			picks, _ := sc.store.ListStackPicks(proj.ID)
-			stackCtx := stack.FormatForPrompt(picksToCatalog(picks))
-			userPrompt = stackCtx + fmt.Sprintf(
-				"Scheduled mission for project %q. Purpose: %s.\n\nLive design doc:\n\n%s\n\nProduce a concise structured report relevant to the project's current state.",
-				proj.Title, a.Purpose, proj.DesignDoc,
-			)
-		}
 	}
+	userPrompt := prompts.AgentUserPrompt(sc.store, a)
 
 	runID, _ := sc.store.StartRun(sql.NullInt64{Int64: a.ID, Valid: true}, projID, "cron", a.SystemPrompt)
 	res, err := sc.llm.Complete(ctx, a.Model, a.SystemPrompt, userPrompt)
@@ -164,20 +155,6 @@ func (sc *Scheduler) runAgent(a store.Agent) {
 	if _, err := sc.store.CreateInboxItem(runID, firstLine(res.Text, 120)); err != nil {
 		log.Printf("scheduler: inbox enqueue failed: %v", err)
 	}
-}
-
-func picksToCatalog(picks []store.StackPick) []stack.Pick {
-	out := make([]stack.Pick, 0, len(picks))
-	for _, p := range picks {
-		out = append(out, stack.Pick{
-			Slot:     p.Slot,
-			OptionID: p.OptionID,
-			FreeText: p.FreeText,
-			Version:  p.Version,
-			Note:     p.Note,
-		})
-	}
-	return out
 }
 
 func firstLine(s string, n int) string {

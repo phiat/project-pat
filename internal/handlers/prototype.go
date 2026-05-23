@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"projectpat/internal/llm"
-	"projectpat/internal/stack"
+	"projectpat/internal/prompts"
 	"projectpat/internal/store"
 )
 
@@ -43,8 +43,7 @@ func (h *Handler) streamPrototype(w http.ResponseWriter, r *http.Request, proj *
 	// even if the user closes the tab.
 	_ = r
 
-	picks, _ := h.S.ListStackPicks(proj.ID)
-	stackList := stack.FormatForPrompt(picksToCatalog(picks))
+	stackList := prompts.Stack(h.S, proj.ID)
 	if stackList == "" {
 		stackList = "(no stack chosen — pick the smallest sensible default given the doc)\n"
 	}

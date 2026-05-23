@@ -56,7 +56,8 @@ CREATE TABLE IF NOT EXISTS projects (
     created_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
-CREATE INDEX IF NOT EXISTS idx_projects_active ON projects(archived_at) WHERE archived_at IS NULL;
+-- idx_projects_active is created inside addProjectArchivedAtColumn so older
+-- DBs (where archived_at hasn't been added yet) don't fail on this script.
 
 CREATE TABLE IF NOT EXISTS project_stack (
     project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
@@ -167,13 +168,17 @@ func migrate(db *sql.DB) error {
 
 func addProjectArchivedAtColumn(db *sql.DB) error {
 	has, err := columnExists(db, "projects", "archived_at")
-	if err != nil || has {
+	if err != nil {
 		return err
 	}
-	if _, err := db.Exec(`ALTER TABLE projects ADD COLUMN archived_at DATETIME`); err != nil {
-		return err
+	if !has {
+		if _, err := db.Exec(`ALTER TABLE projects ADD COLUMN archived_at DATETIME`); err != nil {
+			return err
+		}
 	}
 	// Partial index — only narrows the working set, doesn't break unique slugs.
+	// Created here (not in the inline schema) so existing DBs don't try to
+	// build it before the column is added.
 	_, err = db.Exec(`CREATE INDEX IF NOT EXISTS idx_projects_active ON projects(archived_at) WHERE archived_at IS NULL`)
 	return err
 }

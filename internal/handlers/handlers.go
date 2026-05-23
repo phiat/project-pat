@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"projectpat/internal/llm"
+	"projectpat/internal/prompts"
 	"projectpat/internal/stack"
 	"projectpat/internal/store"
 	"projectpat/internal/web"
@@ -372,7 +373,7 @@ func (h *Handler) projectActions(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) renderStackPanel(w http.ResponseWriter, proj *store.Project) {
 	picks, _ := h.S.ListStackPicks(proj.ID)
 	runtime := runtimeOptionID(picks)
-	incompats := stack.IncompatibleSlots(picksToCatalog(picks), runtime)
+	incompats := stack.IncompatibleSlots(prompts.ToCatalogPicks(picks), runtime)
 	incompatSet := make(map[string]bool, len(incompats))
 	for _, s := range incompats {
 		incompatSet[s] = true
@@ -565,24 +566,10 @@ func runtimeOptionID(picks []store.StackPick) string {
 	return ""
 }
 
-func picksToCatalog(picks []store.StackPick) []stack.Pick {
-	out := make([]stack.Pick, 0, len(picks))
-	for _, p := range picks {
-		out = append(out, stack.Pick{
-			Slot:     p.Slot,
-			OptionID: p.OptionID,
-			FreeText: p.FreeText,
-			Version:  p.Version,
-			Note:     p.Note,
-		})
-	}
-	return out
-}
-
 func (h *Handler) buildStackPanelData(proj *store.Project) stackPanelData {
 	picks, _ := h.S.ListStackPicks(proj.ID)
 	runtime := runtimeOptionID(picks)
-	incompats := stack.IncompatibleSlots(picksToCatalog(picks), runtime)
+	incompats := stack.IncompatibleSlots(prompts.ToCatalogPicks(picks), runtime)
 	incompatSet := make(map[string]bool, len(incompats))
 	for _, s := range incompats {
 		incompatSet[s] = true
@@ -624,11 +611,7 @@ func (h *Handler) buildStackPanelData(proj *store.Project) stackPanelData {
 }
 
 func (h *Handler) stackContext(projectID int64) string {
-	picks, err := h.S.ListStackPicks(projectID)
-	if err != nil || len(picks) == 0 {
-		return ""
-	}
-	return stack.FormatForPrompt(picksToCatalog(picks))
+	return prompts.Stack(h.S, projectID)
 }
 
 // ---- devil's office hours ----
@@ -687,17 +670,7 @@ func oneLine(s string) string {
 }
 
 func (h *Handler) decisionsContext(projectID int64) string {
-	decs, err := h.S.ListArtifacts(projectID, "decision")
-	if err != nil || len(decs) == 0 {
-		return ""
-	}
-	var b strings.Builder
-	b.WriteString("Resolved decisions (do not relitigate; treat as load-bearing context):\n")
-	for _, d := range decs {
-		fmt.Fprintf(&b, "- %s → %s\n", oneLine(d.Title), oneLine(d.Body))
-	}
-	b.WriteString("\n")
-	return b.String()
+	return prompts.Decisions(h.S, projectID)
 }
 
 func (h *Handler) streamBrief(w http.ResponseWriter, r *http.Request, proj *store.Project) {
@@ -1244,16 +1217,10 @@ func (h *Handler) agentActions(w http.ResponseWriter, r *http.Request) {
 		defer cancel()
 
 		var projID sql.NullInt64
-		userPrompt := fmt.Sprintf("Run mission: %s. Produce a structured report.", agent.Purpose)
 		if agent.ProjectID.Valid {
 			projID = agent.ProjectID
-			if proj, err := h.S.GetProject(agent.ProjectID.Int64); err == nil {
-				userPrompt = h.stackContext(proj.ID) + fmt.Sprintf(
-					"Run mission for project %q. Purpose: %s.\n\nLive design doc:\n\n%s\n\nProduce a structured report.",
-					proj.Title, agent.Purpose, proj.DesignDoc,
-				)
-			}
 		}
+		userPrompt := prompts.AgentUserPrompt(h.S, *agent)
 
 		runID, _ := h.S.StartRun(sql.NullInt64{Int64: agent.ID, Valid: true}, projID, "manual", agent.SystemPrompt)
 		res, err := h.LLM.Complete(ctx, agent.Model, agent.SystemPrompt, userPrompt)

@@ -18,10 +18,10 @@ import (
 	"projectpat/internal/web"
 )
 
-func main() {
-	log.SetFlags(log.LstdFlags | log.Lmsgprefix)
-	log.SetPrefix("[pat] ")
-
+// runServer brings up the HTTP server with the scheduler attached and
+// blocks until SIGINT/SIGTERM. Lifted verbatim from the original
+// cmd/server/main.go body so existing behaviour is unchanged.
+func runServer() {
 	cfg, err := config.Load()
 	if err != nil {
 		log.Fatalf("config: %v", err)
@@ -100,7 +100,6 @@ func main() {
 	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
 	<-sig
 	log.Printf("shutdown initiated")
-	// signal in-flight agent goroutines to abort, then close http
 	rootCancel()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
