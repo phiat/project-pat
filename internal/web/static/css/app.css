@@ -29,9 +29,10 @@
 }
 
 /* Light theme. Body text 14:1, muted ~6:1, blue ~7:1, err ~6:1 — all
-   AA-safe on the cream bg. The 3D background is hidden in light mode
-   (see #bg-canvas / .scrim rules) and background.js short-circuits
-   its tick loop so the GPU stays idle. */
+   AA-safe on the cream bg. The 3D background still renders in light
+   mode but background.js washes the palette toward white and swaps
+   the clear color to cream so it reads as a faint pastel landscape
+   instead of competing with the page text. The dark scrim is hidden. */
 [data-theme="light"] {
   --c-bg: #f6f3e8;
   --c-bg-2: #ecebdf;
@@ -56,7 +57,6 @@
 }
 
 html { transition: background-color 0.25s ease, color 0.25s ease; }
-[data-theme="light"] #bg-canvas { display: none; }
 [data-theme="light"] .scrim { display: none; }
 
 * { box-sizing: border-box; }

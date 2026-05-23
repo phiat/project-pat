@@ -117,9 +117,22 @@ function shiftHSL(src, dst, deg) {
   dst.setHSL(h, _hsl.s, _hsl.l);
 }
 
+// Light-theme wash: cream backdrop + how aggressively the palette is
+// lerped toward white. Tuned to read as a faint pastel landscape so the
+// page text stays the focus.
+const LIGHT_BG_COLOR  = new THREE.Color(0xf6f3e8);  // matches css --c-bg
+const LIGHT_TINT      = new THREE.Color(0xffffff);
+const LIGHT_FOG_NEAR  = 18;   // pull fog in so far cubes dissolve into cream
+const LIGHT_FOG_FAR   = 120;
+const LIGHT_INT_MUL   = 0.55; // dim point/dir lights so highlights don't glare
+const LIGHT_DUST_OP   = 0.10;
+const DARK_DUST_OP    = 0.32;
+
 // applyHue updates derived palette objects (cube ramp + lights + fog +
-// clear color) for the given hue offset in degrees.
-function applyHue(deg) {
+// clear color) for the given hue offset. If `lightBlend` > 0, the
+// shifted palette is then lerped toward white and the clear/fog swap to
+// cream — same hue cycle, washed-out reading.
+function applyHue(deg, lightBlend) {
   shiftHSL(baseColors.low,    shiftedColors.low,    deg);
   shiftHSL(baseColors.mid,    shiftedColors.mid,    deg);
   shiftHSL(baseColors.high,   shiftedColors.high,   deg);
@@ -132,6 +145,24 @@ function applyHue(deg) {
   shiftHSL(lights.ptB,        ptB.color,            deg);
   shiftHSL(lights.fog,        scene.fog.color,      deg);
   shiftHSL(lights.clear,      tmpColor,             deg);
+
+  if (lightBlend > 0) {
+    // Cubes: stronger lerp toward white for lower-elevation cells so the
+    // valleys disappear and only ridge tints remain. Accent stays a touch
+    // more saturated so the sparkles still read.
+    shiftedColors.low.lerp(LIGHT_TINT,    lightBlend * 0.88);
+    shiftedColors.mid.lerp(LIGHT_TINT,    lightBlend * 0.78);
+    shiftedColors.high.lerp(LIGHT_TINT,   lightBlend * 0.66);
+    shiftedColors.accent.lerp(LIGHT_TINT, lightBlend * 0.55);
+    hemi.color.lerp(LIGHT_TINT,           lightBlend * 0.55);
+    hemi.groundColor.lerp(LIGHT_TINT,     lightBlend * 0.55);
+    sun.color.lerp(LIGHT_TINT,            lightBlend * 0.40);
+    fill.color.lerp(LIGHT_TINT,           lightBlend * 0.40);
+    ptA.color.lerp(LIGHT_TINT,            lightBlend * 0.40);
+    ptB.color.lerp(LIGHT_TINT,            lightBlend * 0.40);
+    scene.fog.color.lerp(LIGHT_BG_COLOR,  lightBlend);
+    tmpColor.copy(LIGHT_BG_COLOR);
+  }
   renderer.setClearColor(tmpColor, 1);
 }
 
@@ -151,9 +182,13 @@ function rewriteInstanceColors() {
   if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
 }
 
+function isLightTheme() {
+  return document.documentElement.getAttribute("data-theme") === "light";
+}
+
 // initial fill so first frame renders before tick()
 let lastBaseStep = 0;
-applyHue(0);
+applyHue(0, isLightTheme() ? 1 : 0);
 for (let iz = 0; iz < GRID_Z; iz++) {
   for (let ix = 0; ix < GRID_X; ix++) {
     const i = iz * GRID_X + ix;
@@ -179,10 +214,12 @@ for (let k = 0; k < dustCount; k++) {
   dustPos[k * 3 + 2] = (Math.random() - 0.5) * 240;
 }
 dustGeo.setAttribute("position", new THREE.BufferAttribute(dustPos, 3));
-const dust = new THREE.Points(dustGeo, new THREE.PointsMaterial({
-  color: palette.platinum, size: 0.5, transparent: true, opacity: 0.32, depthWrite: false,
-}));
+const dustMat = new THREE.PointsMaterial({
+  color: palette.platinum, size: 0.5, transparent: true, opacity: DARK_DUST_OP, depthWrite: false,
+});
+const dust = new THREE.Points(dustGeo, dustMat);
 scene.add(dust);
+dustMat.opacity = isLightTheme() ? LIGHT_DUST_OP : DARK_DUST_OP;
 
 const clock = new THREE.Clock();
 lastBaseStep = -1;
@@ -224,14 +261,13 @@ function onResize() {
 window.addEventListener("resize", onResize, { passive: true });
 
 let lastAppliedHue = 0;
+let lastLightBlend = isLightTheme() ? 1 : 0;
 
 function tick() {
-  // Light theme hides the canvas; skip the entire frame so we don't
-  // burn GPU cycles on an invisible scene.
-  if (document.documentElement.getAttribute("data-theme") === "light") {
-    requestAnimationFrame(tick);
-    return;
-  }
+  const lightBlend = isLightTheme() ? 1 : 0;
+  const themeChanged = lightBlend !== lastLightBlend;
+  if (themeChanged) dustMat.opacity = lightBlend > 0 ? LIGHT_DUST_OP : DARK_DUST_OP;
+
   const t = clock.getElapsedTime();
   const scroll = t * DRIFT;
   const baseStep = Math.floor(scroll / CELL);
@@ -266,25 +302,32 @@ function tick() {
 
   const targetHue = effectiveHueAt(t);
   // While cycling we need to rewrite the cube colors every frame; idle we
-  // can skip (already handled by baseStepChanged path).
+  // can skip (already handled by baseStepChanged path). A theme flip also
+  // forces a full repaint so the wash lands on every cube right away.
   const cycling = cycleStartT !== null;
-  if (cycling || Math.abs(targetHue - lastAppliedHue) > 0.05) {
-    applyHue(targetHue);
+  if (cycling || themeChanged || Math.abs(targetHue - lastAppliedHue) > 0.05) {
+    applyHue(targetHue, lightBlend);
     lastAppliedHue = targetHue;
-    if (cycling && !baseStepChanged) rewriteInstanceColors();
+    lastLightBlend = lightBlend;
+    if ((cycling || themeChanged) && !baseStepChanged) rewriteInstanceColors();
   }
 
   // Dynamic lighting — keep it gentle so it never demands attention.
-  hemi.intensity   = 0.78 + Math.sin(t * 0.07) * 0.14;
-  sun.intensity    = 0.55 + Math.sin(t * 0.05 + 1.3) * 0.10;
-  fill.intensity   = 0.32 + Math.sin(t * 0.06 + 2.1) * 0.08;
-  ptA.intensity    = 1.10 + Math.sin(t * 0.18) * 0.45;
-  ptB.intensity    = 0.85 + Math.sin(t * 0.13 + 0.8) * 0.35;
+  // In light mode the whole scene dims (LIGHT_INT_MUL) so the cream
+  // backdrop stays dominant.
+  const im = 1 - lightBlend * (1 - LIGHT_INT_MUL);
+  hemi.intensity   = (0.78 + Math.sin(t * 0.07) * 0.14) * im;
+  sun.intensity    = (0.55 + Math.sin(t * 0.05 + 1.3) * 0.10) * im;
+  fill.intensity   = (0.32 + Math.sin(t * 0.06 + 2.1) * 0.08) * im;
+  ptA.intensity    = (1.10 + Math.sin(t * 0.18) * 0.45) * im;
+  ptB.intensity    = (0.85 + Math.sin(t * 0.13 + 0.8) * 0.35) * im;
   ptA.position.set(Math.sin(t * 0.11) * 45, 22 + Math.sin(t * 0.07) * 4, -30 + Math.cos(t * 0.12) * 25);
   ptB.position.set(Math.cos(t * 0.09) * 35, 16 + Math.cos(t * 0.10) * 3, -10 + Math.sin(t * 0.13) * 18);
   sun.position.set(40 + Math.sin(t * 0.03) * 25, 80, 30 + Math.cos(t * 0.03) * 25);
-  scene.fog.near = 50 + Math.sin(t * 0.05) * 6;
-  scene.fog.far  = 180 + Math.sin(t * 0.04 + 1.0) * 10;
+  const fogNearDark = 50 + Math.sin(t * 0.05) * 6;
+  const fogFarDark  = 180 + Math.sin(t * 0.04 + 1.0) * 10;
+  scene.fog.near = fogNearDark + (LIGHT_FOG_NEAR - fogNearDark) * lightBlend;
+  scene.fog.far  = fogFarDark  + (LIGHT_FOG_FAR  - fogFarDark ) * lightBlend;
 
   // gentle camera sway — feels like a window seat
   camera.position.x = Math.sin(t * 0.08) * 1.2;
