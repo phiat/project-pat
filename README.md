@@ -43,10 +43,10 @@ All LLM endpoints stream over SSE; the UI shows tokens arriving in real-time, th
 ```bash
 mise install                # installs a Go toolchain per mise.toml (or use any Go ≥ 1.26 directly)
 go mod tidy
-go run ./cmd/pat server
+go run ./cmd/pat server    # or: just run
 ```
 
-Then open <http://localhost:8080>.
+Then open <http://localhost:8080>. `just` (no args) lists the available recipes — `just repl`, `just build`, `just test`, `just check`, `just pat <subcommand>`.
 
 There's also a CLI / REPL over the same DB — run `go run ./cmd/pat help` for the full list. Highlights:
 ```
