@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html/template"
 	"log"
@@ -12,6 +13,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"projectpat/internal/llm"
@@ -36,10 +38,41 @@ type Handler struct {
 	// WorkspaceDir is the on-disk root for materialised project artifacts.
 	// Empty disables materialisation.
 	WorkspaceDir string
+
+	// bg tracks detached goroutines (e.g. manual agent runs) so the
+	// server can drain them before closing the DB on shutdown.
+	bg sync.WaitGroup
 }
 
 func New(s *store.Store, l *llm.Client, r *web.Renderer) *Handler {
 	return &Handler{S: s, LLM: l, R: r, RootCtx: context.Background()}
+}
+
+// Background launches a tracked goroutine. Callers should derive any
+// context from h.RootCtx so the work is cancelled on shutdown — Wait
+// only blocks the close of resources (DB, etc.), it does not cancel.
+func (h *Handler) Background(fn func()) {
+	h.bg.Add(1)
+	go func() {
+		defer h.bg.Done()
+		fn()
+	}()
+}
+
+// Wait blocks until all background goroutines finish, or until ctx
+// expires. Returns ctx.Err() on timeout, nil on clean drain.
+func (h *Handler) Wait(ctx context.Context) error {
+	done := make(chan struct{})
+	go func() {
+		h.bg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func (h *Handler) Mount(mux *http.ServeMux) {
@@ -114,7 +147,7 @@ func (h *Handler) ideas(w http.ResponseWriter, r *http.Request) {
 				fmt.Fprintf(w, `<div class="row-sub">%s</div>`, htmlEscape(truncate(i.Body, 220)))
 			}
 			fmt.Fprintf(w, `</div><div class="row-actions"><span class="muted">%s</span>`, i.CreatedAt.Format("2006-01-02 15:04"))
-			fmt.Fprintf(w, `<form hx-post="/ideas/%d/promote" hx-swap="none"><button class="btn-ghost">promote →</button></form></div></li>`, i.ID)
+			fmt.Fprintf(w, `<form hx-post="/ideas/%d/promote" hx-swap="none" hx-disabled-elt="find button"><button class="btn-ghost" type="submit"><span class="label-idle">promote →</span><span class="label-busy">promoting…</span></button></form></div></li>`, i.ID)
 		}
 		fmt.Fprintln(w, `</ul></section>`)
 	default:
@@ -170,7 +203,16 @@ func (h *Handler) ideaActions(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), 404)
 		return
 	}
+	// Idempotent: if this idea was already promoted, send the user to
+	// that project instead of erroring on a duplicate slug.
+	if existing, err := h.S.ProjectByIdea(idea.ID); err == nil && existing != nil {
+		w.Header().Set("HX-Redirect", fmt.Sprintf("/projects/%d", existing.ID))
+		w.WriteHeader(204)
+		return
+	}
+	slug := uniqueProjectSlug(h.S, store.Slugify(idea.Title))
 	pid, err := h.S.CreateProject(store.Project{
+		Slug:     slug,
 		Title:    idea.Title,
 		Summary:  truncate(idea.Body, 200),
 		FromIdea: sql.NullInt64{Int64: idea.ID, Valid: true},
@@ -181,6 +223,24 @@ func (h *Handler) ideaActions(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("HX-Redirect", fmt.Sprintf("/projects/%d", pid))
 	w.WriteHeader(204)
+}
+
+// uniqueProjectSlug appends -2, -3, … until the slug is free. Slugs are
+// short, so a linear probe is fine.
+func uniqueProjectSlug(s *store.Store, base string) string {
+	if base == "" {
+		base = "project"
+	}
+	candidate := base
+	for i := 2; ; i++ {
+		if _, err := s.ProjectBySlug(candidate); err != nil {
+			return candidate
+		}
+		candidate = fmt.Sprintf("%s-%d", base, i)
+		if i > 1000 {
+			return candidate
+		}
+	}
 }
 
 // ---- projects ----
@@ -775,6 +835,11 @@ func (h *Handler) briefActions(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	briefID, err := strconv.ParseInt(parts[1], 10, 64)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
 	itemID, err := strconv.ParseInt(parts[3], 10, 64)
 	if err != nil {
 		http.NotFound(w, r)
@@ -783,6 +848,10 @@ func (h *Handler) briefActions(w http.ResponseWriter, r *http.Request) {
 	item, err := h.S.GetBriefItem(itemID)
 	if err != nil {
 		http.Error(w, err.Error(), 404)
+		return
+	}
+	if item.BriefID != briefID {
+		http.NotFound(w, r)
 		return
 	}
 	switch parts[4] {
@@ -1040,7 +1109,12 @@ func (h *Handler) streamSSE(w http.ResponseWriter, r *http.Request, spec streamS
 		status := "failed"
 		// If the request context died (tab close, network drop) we still
 		// want to keep whatever streamed so far rather than lose it.
-		if r.Context().Err() != nil && partial.Len() > 0 {
+		// Drivers wrap the transport error, so check both the request
+		// context AND the returned error for cancellation/deadline.
+		canceled := r.Context().Err() != nil ||
+			errors.Is(err, context.Canceled) ||
+			errors.Is(err, context.DeadlineExceeded)
+		if canceled && partial.Len() > 0 {
 			status = "cancelled"
 		}
 		if fErr := h.S.FinishRun(runID, status, partial.String(), err.Error(), 0, 0); fErr != nil {
@@ -1212,7 +1286,7 @@ func (h *Handler) agentActions(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), 404)
 		return
 	}
-	go func() {
+	h.Background(func() {
 		ctx, cancel := context.WithTimeout(h.RootCtx, 180*time.Second)
 		defer cancel()
 
@@ -1233,7 +1307,7 @@ func (h *Handler) agentActions(w http.ResponseWriter, r *http.Request) {
 		if _, err := h.S.CreateInboxItem(runID, firstLineSummary(res.Text, 120)); err != nil {
 			log.Printf("inbox enqueue: %v", err)
 		}
-	}()
+	})
 	w.Header().Set("HX-Trigger", "agent-run-started")
 	w.WriteHeader(202)
 }

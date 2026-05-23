@@ -259,6 +259,38 @@ button:hover { filter: brightness(1.1); }
 .btn-ghost:hover { border-color: var(--c-blue); color: var(--c-snow); }
 .btn-primary { background: var(--c-blue); }
 
+/* button busy-state: label-idle / label-busy swap when htmx adds the
+   hx-request attribute (or when the button is otherwise disabled
+   mid-request via hx-disabled-elt). */
+.label-busy { display: none; }
+button.htmx-request .label-idle,
+button[disabled] .label-idle { display: none; }
+button.htmx-request .label-busy,
+button[disabled] .label-busy { display: inline; }
+button.htmx-request, button[disabled] { opacity: 0.7; cursor: progress; }
+
+/* toast for global htmx errors — surfaces silent 4xx/5xx so the user
+   isn't left wondering why the click did nothing. */
+#error-toast {
+  position: fixed;
+  top: 16px;
+  right: 16px;
+  z-index: 1000;
+  max-width: 420px;
+  padding: 10px 14px;
+  border: 1px solid #b95c5c;
+  background: #2a1818;
+  color: #f4d6d6;
+  border-radius: 6px;
+  font-size: 13px;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+  opacity: 0;
+  transform: translateY(-8px);
+  transition: opacity 160ms ease, transform 160ms ease;
+  pointer-events: none;
+}
+#error-toast.show { opacity: 1; transform: translateY(0); pointer-events: auto; }
+
 .table {
   width: 100%;
   border-collapse: collapse;

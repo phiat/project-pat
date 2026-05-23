@@ -23,8 +23,11 @@
       </div>
       <div class="row-actions">
         <span class="muted">{{date .CreatedAt}}</span>
-        <form hx-post="/ideas/{{.ID}}/promote" hx-swap="none">
-          <button class="btn-ghost">promote →</button>
+        <form hx-post="/ideas/{{.ID}}/promote" hx-swap="none" hx-disabled-elt="find button">
+          <button class="btn-ghost" type="submit">
+            <span class="label-idle">promote →</span>
+            <span class="label-busy">promoting…</span>
+          </button>
         </form>
       </div>
     </li>

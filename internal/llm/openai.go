@@ -7,10 +7,18 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strings"
 	"time"
 )
+
+func truncateForLog(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "…"
+}
 
 // openaiDriver speaks the OpenAI /v1/chat/completions protocol. It also
 // covers any compatible vendor (DeepSeek, OpenRouter, Together, Groq,
@@ -198,6 +206,14 @@ func (d *openaiDriver) CompleteStream(ctx context.Context, modelKey, system, use
 			PromptTokens     int `json:"prompt_tokens"`
 			CompletionTokens int `json:"completion_tokens"`
 		} `json:"usage"`
+		// Several vendors (OpenRouter, DeepSeek, Groq) inject an error
+		// object mid-stream on rate-limit / quota. Capture it so we
+		// don't silently truncate a partial response.
+		Error *struct {
+			Message string `json:"message"`
+			Type    string `json:"type"`
+			Code    any    `json:"code"`
+		} `json:"error"`
 	}
 
 	var full strings.Builder
@@ -215,7 +231,11 @@ func (d *openaiDriver) CompleteStream(ctx context.Context, modelKey, system, use
 		}
 		var ch chunkResp
 		if err := json.Unmarshal([]byte(payload), &ch); err != nil {
+			log.Printf("llm/%s: skipping unparseable stream chunk: %v · %q", d.provider, err, truncateForLog(payload, 200))
 			continue
+		}
+		if ch.Error != nil && ch.Error.Message != "" {
+			return nil, fmt.Errorf("%s stream error: %s", d.provider, ch.Error.Message)
 		}
 		for _, c := range ch.Choices {
 			if c.Delta.Content != "" {

@@ -115,7 +115,7 @@
   const qRaw   = document.getElementById("devil-question-raw");
   const dismiss = document.getElementById("devil-dismiss");
   const spin   = document.getElementById("devil-spin");
-  const projectId = {{.Project.ID}};
+  const projectId = {{$.Project.ID}};
   let busy = false;
   summon.addEventListener("click", async () => {
     if (busy) return; busy = true;
@@ -196,7 +196,7 @@
   if (!btn) return;
   const out  = document.getElementById("brief-recon");
   const spin = document.getElementById("recon-spin");
-  const projectId = {{.Project.ID}};
+  const projectId = {{$.Project.ID}};
   let busy = false;
   btn.addEventListener("click", async () => {
     if (busy) return; busy = true;
@@ -321,7 +321,7 @@
 
 <script>
 (() => {
-  const projectId = {{.Project.ID}};
+  const projectId = {{$.Project.ID}};
   setupStream("draft-form",   `/projects/${projectId}/draft`,           "doc",  "doc-spin");
   setupTeamDraft(projectId);
   setupPrototype(projectId);
@@ -383,7 +383,7 @@
         onDelta: (text) => { pre.textContent += text; },
         onPhase: (p) => {
           phase.textContent = "phase: " + p + "…";
-          out.insertAdjacentHTML("beforeend", `<div class="muted">${p} →</div><pre class="stream-pre" aria-live="polite"></pre>`);
+          out.insertAdjacentHTML("beforeend", `<div class="muted">${window.escapeHTML(p)} →</div><pre class="stream-pre" aria-live="polite"></pre>`);
           const pres = out.querySelectorAll(".stream-pre");
           pre = pres[pres.length - 1];
         },
@@ -441,7 +441,7 @@
       onError: (msg)  => { out.innerHTML = `<p class="err">${window.escapeHTML(msg)}</p>`; failed = true; },
     });
     if (!failed && result.ok) window.setCopySource(outId, result.accumulated);
-    if (final) out.innerHTML = final;
+    if (final && !failed) out.innerHTML = final;
     spin.hidden = true;
     if (!failed && onDone) onDone();
   }

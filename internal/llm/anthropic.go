@@ -252,6 +252,7 @@ func (d *anthropicDriver) CompleteStream(ctx context.Context, modelKey, system, 
 			Type string `json:"type"`
 		}
 		if err := json.Unmarshal([]byte(payload), &head); err != nil {
+			log.Printf("llm/anthropic: skipping unparseable stream chunk: %v · %q", err, truncateForLog(payload, 200))
 			continue
 		}
 		switch head.Type {
@@ -274,6 +275,21 @@ func (d *anthropicDriver) CompleteStream(ctx context.Context, modelKey, system, 
 			if err := json.Unmarshal([]byte(payload), &md); err == nil && md.Usage.OutputTokens > 0 {
 				tokOut = md.Usage.OutputTokens
 			}
+		case "error":
+			// Anthropic streams a typed error event on overload /
+			// rate-limit. Surface it instead of silently truncating.
+			var ee struct {
+				Error struct {
+					Type    string `json:"type"`
+					Message string `json:"message"`
+				} `json:"error"`
+			}
+			_ = json.Unmarshal([]byte(payload), &ee)
+			msg := ee.Error.Message
+			if msg == "" {
+				msg = "anthropic stream error event"
+			}
+			return nil, fmt.Errorf("anthropic stream error (%s): %s", ee.Error.Type, msg)
 		case "content_block_start", "content_block_stop", "message_stop", "ping":
 			// expected but uninteresting events; ignore quietly
 		default:

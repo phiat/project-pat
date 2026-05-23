@@ -104,6 +104,12 @@ func runServer() {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	_ = srv.Shutdown(ctx)
+	// Drain detached handler goroutines (e.g. manual agent runs)
+	// before main returns and `defer database.Close()` closes the DB
+	// out from under any in-flight FinishRun / CreateInboxItem write.
+	if err := h.Wait(ctx); err != nil {
+		log.Printf("background drain: %v (some writes may be lost)", err)
+	}
 }
 
 func withLogging(next http.Handler) http.Handler {

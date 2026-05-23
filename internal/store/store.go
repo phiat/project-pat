@@ -156,6 +156,28 @@ func (s *Store) GetProject(id int64) (*Project, error) {
 	return &p, nil
 }
 
+// ProjectBySlug returns the project with the given slug, or
+// (nil, sql.ErrNoRows) if no project has that slug.
+func (s *Store) ProjectBySlug(slug string) (*Project, error) {
+	row := s.DB.QueryRow(`SELECT id, slug, title, summary, design_doc, status, from_idea, stack_preset, archived_at, created_at, updated_at FROM projects WHERE slug=?`, slug)
+	var p Project
+	if err := row.Scan(&p.ID, &p.Slug, &p.Title, &p.Summary, &p.DesignDoc, &p.Status, &p.FromIdea, &p.StackPreset, &p.ArchivedAt, &p.CreatedAt, &p.UpdatedAt); err != nil {
+		return nil, err
+	}
+	return &p, nil
+}
+
+// ProjectByIdea returns the project promoted from this idea, or
+// (nil, sql.ErrNoRows) if the idea hasn't been promoted yet.
+func (s *Store) ProjectByIdea(ideaID int64) (*Project, error) {
+	row := s.DB.QueryRow(`SELECT id, slug, title, summary, design_doc, status, from_idea, stack_preset, archived_at, created_at, updated_at FROM projects WHERE from_idea = ? ORDER BY id DESC LIMIT 1`, ideaID)
+	var p Project
+	if err := row.Scan(&p.ID, &p.Slug, &p.Title, &p.Summary, &p.DesignDoc, &p.Status, &p.FromIdea, &p.StackPreset, &p.ArchivedAt, &p.CreatedAt, &p.UpdatedAt); err != nil {
+		return nil, err
+	}
+	return &p, nil
+}
+
 // ArchiveProject stamps archived_at = now (idempotent — re-archiving a
 // project leaves the original timestamp intact).
 func (s *Store) ArchiveProject(id int64) error {
