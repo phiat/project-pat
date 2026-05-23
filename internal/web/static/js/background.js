@@ -73,10 +73,22 @@ const cubeMat = new THREE.MeshStandardMaterial({
 });
 const mesh = new THREE.InstancedMesh(cubeGeo, cubeMat, GRID_X * GRID_Z);
 mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-// Tiny yaw twist (~1°) so the grid rows aren't perfectly perpendicular
-// to the camera — kills the visible seam at the far edge of the plane.
-mesh.rotation.y = THREE.MathUtils.degToRad(1);
 scene.add(mesh);
+
+// Ground plane sitting just below the cubes, matched to the "low"
+// (valley) palette colour. In light theme the cream page-bg would
+// otherwise show through the 6%-cell gaps and read as a hard seam at
+// the horizon; the plane keeps the floor hue-matched to the cubes.
+const groundGeo = new THREE.PlaneGeometry(GRID_X * CELL * 4, GRID_Z * CELL * 4);
+const groundMat = new THREE.MeshStandardMaterial({
+  color: palette.blackForest,
+  roughness: 0.98,
+  metalness: 0.0,
+});
+const ground = new THREE.Mesh(groundGeo, groundMat);
+ground.rotation.x = -Math.PI / 2;
+ground.position.y = -0.01; // just below cube bottoms (which sit at y=0)
+scene.add(ground);
 
 const tmpObj = new THREE.Object3D();
 const tmpColor = new THREE.Color();
@@ -166,6 +178,9 @@ function applyHue(deg, lightBlend) {
     scene.fog.color.lerp(LIGHT_BG_COLOR,  lightBlend);
     tmpColor.copy(LIGHT_BG_COLOR);
   }
+  // Ground tracks the (already-blended) "low" colour, but stays a touch
+  // darker so the cube bottoms still read as sitting on something.
+  groundMat.color.copy(shiftedColors.low).multiplyScalar(lightBlend > 0 ? 0.92 : 0.75);
   renderer.setClearColor(tmpColor, 1);
 }
 
