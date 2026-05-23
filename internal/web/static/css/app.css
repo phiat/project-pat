@@ -120,6 +120,8 @@ a:hover { color: var(--c-beige); }
   transition: border-color .15s ease, transform .15s ease;
 }
 .card-link:hover { border-color: var(--c-blue); transform: translateY(-1px); }
+.card-archived { opacity: 0.55; }
+.card-archived:hover { opacity: 1; }
 .card h3 { margin: 0; font-size: 16px; color: var(--c-snow); letter-spacing: 0.2px; }
 .card p { margin: 0; color: var(--c-beige); font-size: 13.5px; line-height: 1.5; }
 .card-eyebrow { font-size: 11px; text-transform: uppercase; color: var(--c-sage); letter-spacing: 1px; }

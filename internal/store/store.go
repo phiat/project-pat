@@ -28,6 +28,7 @@ type Project struct {
 	Status      string
 	FromIdea    sql.NullInt64
 	StackPreset string
+	ArchivedAt  sql.NullTime
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
 }
@@ -112,8 +113,25 @@ func (s *Store) CreateProject(p Project) (int64, error) {
 	return res.LastInsertId()
 }
 
+// ListProjects returns active (non-archived) projects, newest first.
 func (s *Store) ListProjects() ([]Project, error) {
-	rows, err := s.DB.Query(`SELECT id, slug, title, summary, design_doc, status, from_idea, stack_preset, created_at, updated_at FROM projects ORDER BY id DESC`)
+	return s.queryProjects(`WHERE archived_at IS NULL ORDER BY id DESC`)
+}
+
+// ListProjectsAll returns every project — archived or not — for the
+// "show archived" toggle on the projects index.
+func (s *Store) ListProjectsAll() ([]Project, error) {
+	return s.queryProjects(`ORDER BY archived_at IS NULL DESC, id DESC`)
+}
+
+// ListArchivedProjects returns only archived projects, most-recently
+// archived first.
+func (s *Store) ListArchivedProjects() ([]Project, error) {
+	return s.queryProjects(`WHERE archived_at IS NOT NULL ORDER BY archived_at DESC`)
+}
+
+func (s *Store) queryProjects(tail string) ([]Project, error) {
+	rows, err := s.DB.Query(`SELECT id, slug, title, summary, design_doc, status, from_idea, stack_preset, archived_at, created_at, updated_at FROM projects ` + tail)
 	if err != nil {
 		return nil, err
 	}
@@ -121,7 +139,7 @@ func (s *Store) ListProjects() ([]Project, error) {
 	var out []Project
 	for rows.Next() {
 		var p Project
-		if err := rows.Scan(&p.ID, &p.Slug, &p.Title, &p.Summary, &p.DesignDoc, &p.Status, &p.FromIdea, &p.StackPreset, &p.CreatedAt, &p.UpdatedAt); err != nil {
+		if err := rows.Scan(&p.ID, &p.Slug, &p.Title, &p.Summary, &p.DesignDoc, &p.Status, &p.FromIdea, &p.StackPreset, &p.ArchivedAt, &p.CreatedAt, &p.UpdatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, p)
@@ -130,12 +148,25 @@ func (s *Store) ListProjects() ([]Project, error) {
 }
 
 func (s *Store) GetProject(id int64) (*Project, error) {
-	row := s.DB.QueryRow(`SELECT id, slug, title, summary, design_doc, status, from_idea, stack_preset, created_at, updated_at FROM projects WHERE id=?`, id)
+	row := s.DB.QueryRow(`SELECT id, slug, title, summary, design_doc, status, from_idea, stack_preset, archived_at, created_at, updated_at FROM projects WHERE id=?`, id)
 	var p Project
-	if err := row.Scan(&p.ID, &p.Slug, &p.Title, &p.Summary, &p.DesignDoc, &p.Status, &p.FromIdea, &p.StackPreset, &p.CreatedAt, &p.UpdatedAt); err != nil {
+	if err := row.Scan(&p.ID, &p.Slug, &p.Title, &p.Summary, &p.DesignDoc, &p.Status, &p.FromIdea, &p.StackPreset, &p.ArchivedAt, &p.CreatedAt, &p.UpdatedAt); err != nil {
 		return nil, err
 	}
 	return &p, nil
+}
+
+// ArchiveProject stamps archived_at = now (idempotent — re-archiving a
+// project leaves the original timestamp intact).
+func (s *Store) ArchiveProject(id int64) error {
+	_, err := s.DB.Exec(`UPDATE projects SET archived_at = CURRENT_TIMESTAMP WHERE id = ? AND archived_at IS NULL`, id)
+	return err
+}
+
+// UnarchiveProject clears the archived stamp.
+func (s *Store) UnarchiveProject(id int64) error {
+	_, err := s.DB.Exec(`UPDATE projects SET archived_at = NULL WHERE id = ?`, id)
+	return err
 }
 
 // Stack picks

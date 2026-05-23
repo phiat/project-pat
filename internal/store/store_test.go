@@ -89,6 +89,65 @@ func TestProjectCRUDAndSlug(t *testing.T) {
 	}
 }
 
+func TestArchiveAndUnarchive(t *testing.T) {
+	s := newTestStore(t)
+	pid, _ := s.CreateProject(Project{Title: "active"})
+
+	got, _ := s.GetProject(pid)
+	if got.ArchivedAt.Valid {
+		t.Errorf("fresh project should not be archived: %+v", got.ArchivedAt)
+	}
+
+	if err := s.ArchiveProject(pid); err != nil {
+		t.Fatalf("ArchiveProject: %v", err)
+	}
+	got, _ = s.GetProject(pid)
+	if !got.ArchivedAt.Valid {
+		t.Errorf("ArchiveProject did not stamp archived_at")
+	}
+
+	// active list excludes it
+	for _, p := range mustList(t, s.ListProjects) {
+		if p.ID == pid {
+			t.Errorf("archived project still in ListProjects()")
+		}
+	}
+	// archived list includes it
+	if !containsProject(mustList(t, s.ListArchivedProjects), pid) {
+		t.Errorf("archived project missing from ListArchivedProjects()")
+	}
+	// all list includes it
+	if !containsProject(mustList(t, s.ListProjectsAll), pid) {
+		t.Errorf("archived project missing from ListProjectsAll()")
+	}
+
+	if err := s.UnarchiveProject(pid); err != nil {
+		t.Fatalf("UnarchiveProject: %v", err)
+	}
+	got, _ = s.GetProject(pid)
+	if got.ArchivedAt.Valid {
+		t.Errorf("UnarchiveProject did not clear archived_at: %+v", got.ArchivedAt)
+	}
+}
+
+func mustList(t *testing.T, fn func() ([]Project, error)) []Project {
+	t.Helper()
+	ps, err := fn()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return ps
+}
+
+func containsProject(ps []Project, id int64) bool {
+	for _, p := range ps {
+		if p.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
 func TestProjectSlugUniqueRejectsDuplicate(t *testing.T) {
 	s := newTestStore(t)
 	if _, err := s.CreateProject(Project{Title: "foo"}); err != nil {

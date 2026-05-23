@@ -137,6 +137,46 @@ func TestMaterializeProject_NoWorkspaceDir(t *testing.T) {
 	}
 }
 
+func TestArchiveUnarchiveRoutes(t *testing.T) {
+	h, _ := newTestHandler(t)
+	pid, _ := h.S.CreateProject(store.Project{Title: "to-archive"})
+
+	// archive
+	req := httptest.NewRequest(http.MethodPost, "/projects/"+itoa(pid)+"/archive", nil)
+	w := httptest.NewRecorder()
+	h.projectActions(w, req)
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("archive status=%d body=%s", w.Code, w.Body.String())
+	}
+	if w.Header().Get("HX-Refresh") != "true" {
+		t.Errorf("archive missing HX-Refresh")
+	}
+	got, _ := h.S.GetProject(pid)
+	if !got.ArchivedAt.Valid {
+		t.Errorf("project not archived after route")
+	}
+
+	// listing now excludes it from the default
+	active, _ := h.S.ListProjects()
+	for _, p := range active {
+		if p.ID == pid {
+			t.Errorf("archived project leaked into default ListProjects()")
+		}
+	}
+
+	// unarchive
+	req = httptest.NewRequest(http.MethodPost, "/projects/"+itoa(pid)+"/unarchive", nil)
+	w = httptest.NewRecorder()
+	h.projectActions(w, req)
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("unarchive status=%d body=%s", w.Code, w.Body.String())
+	}
+	got, _ = h.S.GetProject(pid)
+	if got.ArchivedAt.Valid {
+		t.Errorf("project still archived after unarchive route")
+	}
+}
+
 func TestStackPanelHandlersTouchDB(t *testing.T) {
 	// Smoke-test that stackUpsert + stackClear round-trip through the
 	// store without panicking. Render output goes nowhere meaningful in

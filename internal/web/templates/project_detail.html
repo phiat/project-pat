@@ -8,6 +8,7 @@
   </div>
   <div class="page-head-right">
     {{statusPill .Status}}
+    {{if .ArchivedAt.Valid}}<span class="pill pill-muted" title="archived {{date .ArchivedAt.Time}}">archived</span>{{end}}
     <span class="muted">{{.Slug}}</span>
     <form hx-post="/projects/{{.ID}}/materialize" hx-swap="none" style="display:inline">
       <button class="btn-ghost" type="submit" title="write design/critique/brief/decisions/stack to workspace/{{.Slug}}/">
@@ -15,6 +16,16 @@
       </button>
     </form>
     {{if $.WorkspaceOnDisk}}<span class="muted mono" title="{{$.WorkspacePath}}">workspace/{{.Slug}}/</span>{{end}}
+    {{if .ArchivedAt.Valid}}
+      <form hx-post="/projects/{{.ID}}/unarchive" hx-swap="none" style="display:inline">
+        <button class="btn-ghost" type="submit" title="restore this project to the active list">↑ unarchive</button>
+      </form>
+    {{else}}
+      <form hx-post="/projects/{{.ID}}/archive" hx-swap="none" style="display:inline"
+            hx-confirm="archive this project? it'll drop off the floor and the default projects list. agents bound to it keep running until you disable them.">
+        <button class="btn-ghost" type="submit" title="hide from floor and default projects list">↓ archive</button>
+      </form>
+    {{end}}
   </div>
 </section>
 

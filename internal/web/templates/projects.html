@@ -1,7 +1,17 @@
 {{define "content"}}
 <section class="page-head">
-  <h1>projects</h1>
-  <p class="muted">each project carries a living design doc.</p>
+  <div class="page-head-left">
+    <h1>projects</h1>
+    <p class="muted">each project carries a living design doc.</p>
+  </div>
+  <div class="page-head-right">
+    {{if .ShowArchived}}
+      <a class="btn-ghost" href="/projects">active only</a>
+      <span class="muted mono">showing all · {{.ArchivedCount}} archived</span>
+    {{else if .ArchivedCount}}
+      <a class="btn-ghost" href="/projects?archived=1">show archived ({{.ArchivedCount}})</a>
+    {{end}}
+  </div>
 </section>
 
 <section class="panel">
@@ -15,8 +25,11 @@
 <section id="project-list" class="grid grid-2">
   {{if .Projects}}
     {{range .Projects}}
-    <a class="card card-link" href="/projects/{{.ID}}">
-      <div class="card-eyebrow">{{statusPill .Status}}</div>
+    <a class="card card-link {{if .ArchivedAt.Valid}}card-archived{{end}}" href="/projects/{{.ID}}">
+      <div class="card-eyebrow">
+        {{statusPill .Status}}
+        {{if .ArchivedAt.Valid}}<span class="pill pill-muted">archived</span>{{end}}
+      </div>
       <h3>{{.Title}}</h3>
       {{if .Summary}}<p>{{truncate .Summary 200}}</p>{{end}}
       <div class="card-stat muted">{{date .UpdatedAt}} · {{.Slug}}</div>

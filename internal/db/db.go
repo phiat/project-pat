@@ -52,9 +52,11 @@ CREATE TABLE IF NOT EXISTS projects (
     status        TEXT NOT NULL DEFAULT 'drafting',
     from_idea     INTEGER REFERENCES ideas(id),
     stack_preset  TEXT NOT NULL DEFAULT '',
+    archived_at   DATETIME,
     created_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+CREATE INDEX IF NOT EXISTS idx_projects_active ON projects(archived_at) WHERE archived_at IS NULL;
 
 CREATE TABLE IF NOT EXISTS project_stack (
     project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
@@ -157,7 +159,23 @@ func migrate(db *sql.DB) error {
 	if err := addAgentProjectColumn(db); err != nil {
 		return err
 	}
-	return addProjectStackPresetColumn(db)
+	if err := addProjectStackPresetColumn(db); err != nil {
+		return err
+	}
+	return addProjectArchivedAtColumn(db)
+}
+
+func addProjectArchivedAtColumn(db *sql.DB) error {
+	has, err := columnExists(db, "projects", "archived_at")
+	if err != nil || has {
+		return err
+	}
+	if _, err := db.Exec(`ALTER TABLE projects ADD COLUMN archived_at DATETIME`); err != nil {
+		return err
+	}
+	// Partial index — only narrows the working set, doesn't break unique slugs.
+	_, err = db.Exec(`CREATE INDEX IF NOT EXISTS idx_projects_active ON projects(archived_at) WHERE archived_at IS NULL`)
+	return err
 }
 
 func addProjectStackPresetColumn(db *sql.DB) error {

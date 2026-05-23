@@ -187,8 +187,20 @@ func (h *Handler) ideaActions(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) projects(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		projs, _ := h.S.ListProjects()
-		h.render(w, "projects", map[string]any{"Title": "projects", "Projects": projs})
+		showArchived := r.URL.Query().Get("archived") == "1"
+		var projs []store.Project
+		if showArchived {
+			projs, _ = h.S.ListProjectsAll()
+		} else {
+			projs, _ = h.S.ListProjects()
+		}
+		archivedN, _ := h.S.ListArchivedProjects()
+		h.render(w, "projects", map[string]any{
+			"Title":        "projects",
+			"Projects":     projs,
+			"ShowArchived": showArchived,
+			"ArchivedCount": len(archivedN),
+		})
 	case http.MethodPost:
 		title := strings.TrimSpace(r.FormValue("title"))
 		summary := strings.TrimSpace(r.FormValue("summary"))
@@ -312,6 +324,22 @@ func (h *Handler) projectActions(w http.ResponseWriter, r *http.Request) {
 			return
 		case "prototype":
 			h.streamPrototype(w, r, proj)
+			return
+		case "archive":
+			if err := h.S.ArchiveProject(proj.ID); err != nil {
+				http.Error(w, err.Error(), 500)
+				return
+			}
+			w.Header().Set("HX-Refresh", "true")
+			w.WriteHeader(204)
+			return
+		case "unarchive":
+			if err := h.S.UnarchiveProject(proj.ID); err != nil {
+				http.Error(w, err.Error(), 500)
+				return
+			}
+			w.Header().Set("HX-Refresh", "true")
+			w.WriteHeader(204)
 			return
 		}
 	}
