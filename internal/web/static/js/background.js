@@ -73,6 +73,9 @@ const cubeMat = new THREE.MeshStandardMaterial({
 });
 const mesh = new THREE.InstancedMesh(cubeGeo, cubeMat, GRID_X * GRID_Z);
 mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+// Tiny yaw twist (~1°) so the grid rows aren't perfectly perpendicular
+// to the camera — kills the visible seam at the far edge of the plane.
+mesh.rotation.y = THREE.MathUtils.degToRad(1);
 scene.add(mesh);
 
 const tmpObj = new THREE.Object3D();

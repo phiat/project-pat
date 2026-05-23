@@ -70,6 +70,12 @@ html, body {
   color: var(--c-platinum);
   background: var(--c-bg);
 }
+/* Sticky footer: body is a flex column so .page fills the gap between
+   the topbar and the footer when content is short, and the footer
+   stays pinned to the viewport bottom instead of floating mid-page. */
+body { display: flex; flex-direction: column; }
+.page { flex: 1 0 auto; }
+.footer { flex: 0 0 auto; }
 
 #bg-canvas {
   position: fixed;
