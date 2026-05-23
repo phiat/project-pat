@@ -277,9 +277,32 @@ button:hover { filter: brightness(1.1); }
 .diff-same { color: var(--c-platinum); }
 .diff-add  { background: rgba(170, 174, 127, 0.10); color: var(--c-beige); }
 .diff-add .diff-mark { color: var(--c-sage); }
-.diff-del  { background: rgba(217, 122, 106, 0.10); color: var(--c-err); text-decoration: line-through; text-decoration-color: rgba(217,122,106,0.45); }
+.diff-del  { background: rgba(217, 122, 106, 0.10); color: var(--c-err); }
 .diff-del .diff-mark { color: var(--c-err); }
 .diff-gap  { color: var(--c-sage); text-align: center; padding: 2px 0; }
+.diff-tok-del {
+  background: rgba(217, 122, 106, 0.22);
+  text-decoration: line-through;
+  text-decoration-color: rgba(217, 122, 106, 0.65);
+  padding: 0 2px;
+  border-radius: 2px;
+  color: var(--c-err);
+}
+.diff-tok-add {
+  background: rgba(170, 174, 127, 0.28);
+  padding: 0 2px;
+  border-radius: 2px;
+  color: var(--c-snow);
+}
+.diff-stats {
+  padding: 4px 12px 8px;
+  border-bottom: 1px solid var(--c-border);
+  margin-bottom: 6px;
+  font-size: 11.5px;
+  letter-spacing: 0.5px;
+}
+.diff-stats-add { color: var(--c-sage); }
+.diff-stats-del { color: var(--c-err); margin-left: 6px; }
 
 .focus-input {
   min-width: 220px;
