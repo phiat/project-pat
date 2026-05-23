@@ -9,6 +9,8 @@
 
 ![overview](docs/overview.png)
 
+![ideas (light theme)](docs/ideas-light.webp)
+
 a single-user workshop for ideation, periodic research, and design-doc drafting — htmx-over-go with multi-provider LLM agents and a cron scheduler.
 
 > **status**: scaffolding, but the loop is closed: ideas → projects → drafted/critiqued/reconciled design docs → workspace artifacts on disk → optional runnable prototype skeleton. Cron-scheduled agents and a manual run-now path feed the inbox; the workshop floor surfaces what's asking for attention.
