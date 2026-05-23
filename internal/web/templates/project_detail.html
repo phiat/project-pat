@@ -15,18 +15,91 @@
 <section class="panel">
   <header class="panel-head">
     <h2>design doc</h2>
-    <form hx-post="/projects/{{.ID}}/draft" hx-target="#doc" hx-swap="innerHTML" hx-indicator="#doc-spin">
+    <form id="draft-form" data-project-id="{{.ID}}">
       <select name="model">
         <option value="flash">flash · fast</option>
         <option value="pro">pro · deeper</option>
       </select>
-      <button class="btn-primary">draft / refine</button>
-      <span id="doc-spin" class="htmx-indicator muted">drafting…</span>
+      <button class="btn-primary" type="submit">draft / refine</button>
+      <span id="doc-spin" class="muted" hidden>streaming…</span>
     </form>
   </header>
-  <article id="doc" class="doc">
-    {{if .DesignDoc}}<pre>{{.DesignDoc}}</pre>{{else}}<p class="muted">no doc yet. click draft to generate.</p>{{end}}
+  <article id="doc" class="doc" data-rendered="{{if .DesignDoc}}1{{else}}0{{end}}">
+    {{if .DesignDoc}}{{markdown .DesignDoc}}{{else}}<p class="muted">no doc yet. click draft to generate.</p>{{end}}
   </article>
 </section>
+
+<script>
+(() => {
+  const form = document.getElementById("draft-form");
+  const doc  = document.getElementById("doc");
+  const spin = document.getElementById("doc-spin");
+  const projectId = form.dataset.projectId;
+  let streaming = false;
+
+  form.addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    if (streaming) return;
+    streaming = true;
+    spin.hidden = false;
+
+    const fd = new FormData(form);
+    const res = await fetch(`/projects/${projectId}/draft`, {
+      method: "POST",
+      body:   fd,
+      headers: { "Accept": "text/event-stream" },
+    });
+    if (!res.ok || !res.body) {
+      doc.innerHTML = `<p class="err">draft failed (${res.status})</p>`;
+      streaming = false; spin.hidden = true; return;
+    }
+
+    doc.innerHTML = `<pre id="doc-stream"></pre>`;
+    const pre = doc.querySelector("#doc-stream");
+
+    const reader = res.body.getReader();
+    const dec = new TextDecoder();
+    let buffer = "";
+    let final = null;
+
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += dec.decode(value, { stream: true });
+      let idx;
+      while ((idx = buffer.indexOf("\n\n")) !== -1) {
+        const block = buffer.slice(0, idx);
+        buffer = buffer.slice(idx + 2);
+        const evt = parseSSE(block);
+        if (evt.event === "delta") {
+          pre.textContent += evt.data;
+        } else if (evt.event === "end") {
+          final = evt.data;
+        } else if (evt.event === "error") {
+          doc.innerHTML = `<p class="err">${escapeHTML(evt.data)}</p>`;
+          streaming = false; spin.hidden = true; return;
+        }
+      }
+    }
+    if (final) doc.innerHTML = final;
+    streaming = false;
+    spin.hidden = true;
+  });
+
+  function parseSSE(block) {
+    const out = { event: "delta", data: "" };
+    const dataLines = [];
+    for (const line of block.split("\n")) {
+      if (line.startsWith("event:")) out.event = line.slice(6).trim();
+      else if (line.startsWith("data:")) dataLines.push(line.slice(5).replace(/^ /, ""));
+    }
+    out.data = dataLines.join("\n");
+    return out;
+  }
+  function escapeHTML(s) {
+    return s.replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]));
+  }
+})();
+</script>
 {{end}}
 {{end}}

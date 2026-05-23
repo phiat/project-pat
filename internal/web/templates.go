@@ -30,6 +30,7 @@ func NewRenderer(dir string) (*Renderer, error) {
 			"add":        func(a, b int) int { return a + b },
 			"statusPill": statusPill,
 			"safeHTML":   func(s string) template.HTML { return template.HTML(s) },
+			"markdown":   RenderMarkdown,
 		},
 		pages:    make(map[string]*template.Template),
 		partials: make(map[string]*template.Template),

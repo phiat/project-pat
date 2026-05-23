@@ -112,19 +112,30 @@ func (h *Handler) quickDraft(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), 500)
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 90*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), 120*time.Second)
 	defer cancel()
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming unsupported", 500)
+		return
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("X-Accel-Buffering", "no")
+	w.WriteHeader(200)
+
+	writeSSE(w, flusher, "meta", fmt.Sprintf("idea #%d", ideaID))
 	runID, _ := h.S.StartRun(sql.NullInt64{}, sql.NullInt64{}, "quick-draft", title+"\n\n"+body)
-	res, err := h.LLM.Complete(ctx, llm.ModelFlashKey, systemSeedPrompt, fmt.Sprintf("Title: %s\n\nContext:\n%s", title, body))
+	res, err := h.LLM.CompleteStream(ctx, llm.ModelFlashKey, systemSeedPrompt, fmt.Sprintf("Title: %s\n\nContext:\n%s", title, body),
+		func(chunk string) { writeSSE(w, flusher, "delta", chunk) })
 	if err != nil {
 		_ = h.S.FinishRun(runID, "failed", "", err.Error(), 0, 0)
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		fmt.Fprintf(w, `<p class="err">draft failed: %s</p>`, htmlEscape(err.Error()))
+		writeSSE(w, flusher, "error", "draft failed: "+err.Error())
 		return
 	}
 	_ = h.S.FinishRun(runID, "ok", res.Text, "", res.TokensIn, res.TokensOut)
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	fmt.Fprintf(w, `<div class="panel" style="margin-top:14px"><div class="muted">seed for idea #%d</div><pre style="white-space:pre-wrap">%s</pre></div>`, ideaID, htmlEscape(res.Text))
+	writeSSE(w, flusher, "end", string(web.RenderMarkdown(res.Text)))
 }
 
 func (h *Handler) ideaActions(w http.ResponseWriter, r *http.Request) {
@@ -221,29 +232,55 @@ func (h *Handler) projectActions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if len(parts) == 3 && parts[2] == "draft" && r.Method == http.MethodPost {
-		modelKey := r.FormValue("model")
-		if modelKey != llm.ModelProKey {
-			modelKey = llm.ModelFlashKey
-		}
-		ctx, cancel := context.WithTimeout(r.Context(), 120*time.Second)
-		defer cancel()
-		userPrompt := fmt.Sprintf("Project title: %s\nSummary: %s\n\nExisting doc (may be empty):\n%s\n\nProduce or refine the design doc.",
-			proj.Title, proj.Summary, proj.DesignDoc)
-		runID, _ := h.S.StartRun(sql.NullInt64{}, sql.NullInt64{Int64: proj.ID, Valid: true}, "project-draft", userPrompt)
-		res, err := h.LLM.Complete(ctx, modelKey, systemDesignDocPrompt, userPrompt)
-		if err != nil {
-			_ = h.S.FinishRun(runID, "failed", "", err.Error(), 0, 0)
-			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-			fmt.Fprintf(w, `<p class="err">draft failed: %s</p>`, htmlEscape(err.Error()))
-			return
-		}
-		_ = h.S.FinishRun(runID, "ok", res.Text, "", res.TokensIn, res.TokensOut)
-		_ = h.S.UpdateProjectDoc(proj.ID, res.Text)
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		fmt.Fprintf(w, `<pre>%s</pre>`, htmlEscape(res.Text))
+		h.streamDraft(w, r, proj)
 		return
 	}
 	http.NotFound(w, r)
+}
+
+func (h *Handler) streamDraft(w http.ResponseWriter, r *http.Request, proj *store.Project) {
+	modelKey := r.FormValue("model")
+	if modelKey != llm.ModelProKey {
+		modelKey = llm.ModelFlashKey
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 180*time.Second)
+	defer cancel()
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming unsupported", 500)
+		return
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("X-Accel-Buffering", "no")
+	w.WriteHeader(200)
+
+	userPrompt := fmt.Sprintf("Project title: %s\nSummary: %s\n\nExisting doc (may be empty):\n%s\n\nProduce or refine the design doc.",
+		proj.Title, proj.Summary, proj.DesignDoc)
+	runID, _ := h.S.StartRun(sql.NullInt64{}, sql.NullInt64{Int64: proj.ID, Valid: true}, "project-draft", userPrompt)
+
+	res, err := h.LLM.CompleteStream(ctx, modelKey, systemDesignDocPrompt, userPrompt, func(chunk string) {
+		writeSSE(w, flusher, "delta", chunk)
+	})
+	if err != nil {
+		_ = h.S.FinishRun(runID, "failed", "", err.Error(), 0, 0)
+		writeSSE(w, flusher, "error", "draft failed: "+err.Error())
+		return
+	}
+	_ = h.S.FinishRun(runID, "ok", res.Text, "", res.TokensIn, res.TokensOut)
+	_ = h.S.UpdateProjectDoc(proj.ID, res.Text)
+	writeSSE(w, flusher, "end", string(web.RenderMarkdown(res.Text)))
+}
+
+// writeSSE writes one SSE event. Lines in data are split per spec.
+func writeSSE(w http.ResponseWriter, f http.Flusher, event, data string) {
+	fmt.Fprintf(w, "event: %s\n", event)
+	for _, line := range strings.Split(data, "\n") {
+		fmt.Fprintf(w, "data: %s\n", line)
+	}
+	fmt.Fprint(w, "\n")
+	f.Flush()
 }
 
 // ---- agents ----

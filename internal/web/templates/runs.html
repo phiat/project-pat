@@ -23,6 +23,13 @@
       {{if .Error}}
       <tr><td colspan="6" class="err mono">{{.Error}}</td></tr>
       {{end}}
+      {{if .Output}}
+      <tr><td colspan="6">
+        <details><summary class="muted">output</summary>
+          <div class="doc">{{markdown .Output}}</div>
+        </details>
+      </td></tr>
+      {{end}}
       {{end}}
     </tbody>
   </table>
