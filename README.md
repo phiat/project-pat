@@ -56,18 +56,27 @@ Model names default to `deepseek-v4-flash` / `deepseek-v4-pro`. If your account 
 
 ## what's wired
 
-- **`/`** — overview: counts + recent runs + quick-draft form (creates an idea and seeds it via flash).
+- **`/`** — overview: counts + recent runs + streaming quick-draft form (creates an idea and seeds it via flash).
 - **`/ideas`** — capture pad; promote an idea to a project.
 - **`/projects`** — project list; create from scratch or via promote.
-- **`/projects/:id`** — design doc with a "draft / refine" button (flash or pro).
-- **`/agents`** — define cron-scheduled missions (name, purpose, system prompt, cron, model). "run now" fires off-thread.
-- **`/runs`** — full LLM run log with token usage and errors.
+- **`/projects/:id`** — the heart of the workshop. Streaming panels for:
+  - **design doc** — draft / refine via flash or pro, output renders as markdown
+  - **critique** — pro critic produces a scorecard + numbered weaknesses + concrete edits; "apply critique" runs a second pro pass that refines the doc against those notes
+  - **research brief** — pro brief with claims, counter-claims, open questions, and a parsed reading list. Items are an interactive checklist; per-item notes persist
+  - **standing orders** — agents scoped to this project; their prompt is auto-templated with the live design doc on every run
+  - **timeline** — recent runs touching the project (any trigger)
+- **`/agents`** — define cron-scheduled missions globally (or scope them via standing orders on a project). "run now" fires off-thread.
+- **`/inbox`** — agent reports (cron + manual) land here with unread badges, star, and a unified-style line diff vs the previous successful run by the same agent. Opening an item marks it read.
+- **`/runs`** — full LLM run log with token usage, errors, and expandable rendered output.
+
+All LLM endpoints stream over SSE; the UI shows tokens arriving in real-time, then swaps in rendered markdown when the stream ends.
 
 ## next slices (not yet built)
 
-- materialize project artifacts to `workspace/<slug>/` (design doc as markdown, README, task list).
-- multi-agent project teams (planner → critic → drafter).
-- streaming responses (htmx SSE or fetch streams) instead of round-trip per draft.
+- materialize project artifacts to `workspace/<slug>/` on disk.
+- multi-agent project teams (planner → critic → drafter chain across multiple system prompts).
 - prototype generation tier: scaffold a runnable repo per project.
-- inbox view for cron-agent reports (with read/dismiss).
-- markdown rendering for design docs (currently shown as `<pre>`).
+- prompt-library versioning for agents (history + diff + test-against-prior-runs).
+- idea cluster board (force-directed three.js graph).
+- reconciliation pass for research briefs (reread the brief against the user's per-item notes).
+- scheduler reload via in-process notify rather than the 30-second poll.

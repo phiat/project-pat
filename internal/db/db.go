@@ -90,6 +90,17 @@ CREATE TABLE IF NOT EXISTS inbox_items (
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS brief_items (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    brief_id   INTEGER NOT NULL REFERENCES artifacts(id) ON DELETE CASCADE,
+    text       TEXT NOT NULL,
+    status     TEXT NOT NULL DEFAULT 'unread',
+    note       TEXT NOT NULL DEFAULT '',
+    position   INTEGER NOT NULL DEFAULT 0,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_brief_items_brief ON brief_items(brief_id);
+
 CREATE INDEX IF NOT EXISTS idx_runs_agent ON runs(agent_id);
 CREATE INDEX IF NOT EXISTS idx_runs_project ON runs(project_id);
 CREATE INDEX IF NOT EXISTS idx_artifacts_project ON artifacts(project_id);

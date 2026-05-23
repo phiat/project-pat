@@ -433,6 +433,81 @@ func (s *Store) ToggleInboxStar(id int64) error {
 	return err
 }
 
+// Brief items
+
+type BriefItem struct {
+	ID        int64
+	BriefID   int64
+	Text      string
+	Status    string
+	Note      string
+	Position  int
+	CreatedAt time.Time
+}
+
+func (s *Store) CreateBriefItems(briefID int64, texts []string) error {
+	if len(texts) == 0 {
+		return nil
+	}
+	tx, err := s.DB.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	stmt, err := tx.Prepare(`INSERT INTO brief_items(brief_id, text, position) VALUES(?,?,?)`)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+	for i, t := range texts {
+		if _, err := stmt.Exec(briefID, t, i); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+func (s *Store) ListBriefItems(briefID int64) ([]BriefItem, error) {
+	rows, err := s.DB.Query(
+		`SELECT id, brief_id, text, status, note, position, created_at
+         FROM brief_items WHERE brief_id=? ORDER BY position ASC`, briefID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []BriefItem
+	for rows.Next() {
+		var b BriefItem
+		if err := rows.Scan(&b.ID, &b.BriefID, &b.Text, &b.Status, &b.Note, &b.Position, &b.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, b)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) GetBriefItem(id int64) (*BriefItem, error) {
+	row := s.DB.QueryRow(
+		`SELECT id, brief_id, text, status, note, position, created_at FROM brief_items WHERE id=?`, id,
+	)
+	var b BriefItem
+	if err := row.Scan(&b.ID, &b.BriefID, &b.Text, &b.Status, &b.Note, &b.Position, &b.CreatedAt); err != nil {
+		return nil, err
+	}
+	return &b, nil
+}
+
+func (s *Store) UpdateBriefItemStatus(id int64, status string) error {
+	_, err := s.DB.Exec(`UPDATE brief_items SET status=? WHERE id=?`, status, id)
+	return err
+}
+
+func (s *Store) UpdateBriefItemNote(id int64, note string) error {
+	_, err := s.DB.Exec(`UPDATE brief_items SET note=? WHERE id=?`, note, id)
+	return err
+}
+
 // PreviousRunOutput returns the output of the most recent prior successful
 // run by the same agent, or "" if none. Used for inbox diff.
 func (s *Store) PreviousRunOutput(agentID, beforeRunID int64) (string, error) {

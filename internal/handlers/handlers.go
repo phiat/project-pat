@@ -38,6 +38,7 @@ func (h *Handler) Mount(mux *http.ServeMux) {
 	mux.HandleFunc("/runs", h.runs)
 	mux.HandleFunc("/inbox", h.inbox)
 	mux.HandleFunc("/inbox/", h.inboxActions)
+	mux.HandleFunc("/briefs/", h.briefActions)
 }
 
 func (h *Handler) home(w http.ResponseWriter, r *http.Request) {
@@ -234,12 +235,19 @@ func (h *Handler) projectActions(w http.ResponseWriter, r *http.Request) {
 		critique, _ := h.S.LatestArtifact(proj.ID, "critique")
 		orders, _ := h.S.ListAgentsForProject(proj.ID)
 		timeline, _ := h.S.RunsForProject(proj.ID, 12)
+		brief, _ := h.S.LatestArtifact(proj.ID, "brief")
+		var briefItems []store.BriefItem
+		if brief != nil {
+			briefItems, _ = h.S.ListBriefItems(brief.ID)
+		}
 		h.render(w, "project_detail", map[string]any{
-			"Title":    proj.Title,
-			"Project":  proj,
-			"Critique": critique,
-			"Orders":   orders,
-			"Timeline": timeline,
+			"Title":      proj.Title,
+			"Project":    proj,
+			"Critique":   critique,
+			"Orders":     orders,
+			"Timeline":   timeline,
+			"Brief":      brief,
+			"BriefItems": briefItems,
 		})
 		return
 	}
@@ -257,9 +265,136 @@ func (h *Handler) projectActions(w http.ResponseWriter, r *http.Request) {
 		case "standing-orders":
 			h.createStandingOrder(w, r, proj)
 			return
+		case "brief":
+			h.streamBrief(w, r, proj)
+			return
 		}
 	}
 	http.NotFound(w, r)
+}
+
+func (h *Handler) streamBrief(w http.ResponseWriter, r *http.Request, proj *store.Project) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming unsupported", 500)
+		return
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("X-Accel-Buffering", "no")
+	w.WriteHeader(200)
+
+	ctx, cancel := context.WithTimeout(r.Context(), 240*time.Second)
+	defer cancel()
+
+	topic := strings.TrimSpace(r.FormValue("topic"))
+	if topic == "" {
+		topic = proj.Title
+	}
+	userPrompt := fmt.Sprintf(
+		"Project: %s\nSummary: %s\n\nTopic to research: %s\n\nProduce a research brief.",
+		proj.Title, proj.Summary, topic,
+	)
+	runID, _ := h.S.StartRun(sql.NullInt64{}, sql.NullInt64{Int64: proj.ID, Valid: true}, "brief", userPrompt)
+	res, err := h.LLM.CompleteStream(ctx, llm.ModelProKey, systemBriefPrompt, userPrompt,
+		func(chunk string) { writeSSE(w, flusher, "delta", chunk) })
+	if err != nil {
+		_ = h.S.FinishRun(runID, "failed", "", err.Error(), 0, 0)
+		writeSSE(w, flusher, "error", "brief failed: "+err.Error())
+		return
+	}
+	_ = h.S.FinishRun(runID, "ok", res.Text, "", res.TokensIn, res.TokensOut)
+
+	briefID, err := h.S.CreateArtifact(store.Artifact{
+		ProjectID: proj.ID, Kind: "brief", Title: topic, Body: res.Text,
+	})
+	if err != nil {
+		log.Printf("brief artifact: %v", err)
+	}
+	if items := web.ExtractReadingList(res.Text); len(items) > 0 && briefID > 0 {
+		if err := h.S.CreateBriefItems(briefID, items); err != nil {
+			log.Printf("brief items: %v", err)
+		}
+	}
+
+	writeSSE(w, flusher, "end", string(web.RenderMarkdown(res.Text)))
+}
+
+func (h *Handler) briefActions(w http.ResponseWriter, r *http.Request) {
+	// /briefs/{briefID}/items/{itemID}/{action}
+	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+	if len(parts) < 5 || parts[0] != "briefs" || parts[2] != "items" {
+		http.NotFound(w, r)
+		return
+	}
+	itemID, err := strconv.ParseInt(parts[3], 10, 64)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	item, err := h.S.GetBriefItem(itemID)
+	if err != nil {
+		http.Error(w, err.Error(), 404)
+		return
+	}
+	switch parts[4] {
+	case "status":
+		if r.Method != http.MethodPost {
+			http.Error(w, "method", 405)
+			return
+		}
+		next := r.FormValue("status")
+		if next != "unread" && next != "reading" && next != "read" {
+			http.Error(w, "bad status", 400)
+			return
+		}
+		_ = h.S.UpdateBriefItemStatus(itemID, next)
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		fmt.Fprint(w, renderBriefItemRow(*item, next, item.Note))
+	case "note":
+		if r.Method != http.MethodPost {
+			http.Error(w, "method", 405)
+			return
+		}
+		note := strings.TrimSpace(r.FormValue("note"))
+		_ = h.S.UpdateBriefItemNote(itemID, note)
+		w.WriteHeader(204)
+	default:
+		http.NotFound(w, r)
+	}
+}
+
+func renderBriefItemRow(b store.BriefItem, status, note string) string {
+	checked := ""
+	cls := "brief-item"
+	if status == "read" {
+		checked = "checked"
+		cls += " brief-item-read"
+	} else if status == "reading" {
+		cls += " brief-item-reading"
+	}
+	var nextStatus string
+	if status == "read" {
+		nextStatus = "unread"
+	} else {
+		nextStatus = "read"
+	}
+	return fmt.Sprintf(`<li id="bi-%d" class="%s">
+  <form hx-post="/briefs/%d/items/%d/status" hx-target="#bi-%d" hx-swap="outerHTML" style="display:inline">
+    <input type="hidden" name="status" value="%s">
+    <button class="brief-check" type="submit" aria-label="toggle">%s</button>
+  </form>
+  <span class="brief-text">%s</span>
+  <input class="brief-note" type="text" name="note" placeholder="note…" value="%s"
+         hx-post="/briefs/%d/items/%d/note" hx-trigger="change" hx-swap="none">
+</li>`,
+		b.ID, cls,
+		b.BriefID, b.ID, b.ID,
+		nextStatus,
+		map[bool]string{true: "✓", false: "○"}[checked == "checked"],
+		htmlEscape(b.Text), htmlEscape(note),
+		b.BriefID, b.ID,
+	)
 }
 
 func (h *Handler) createStandingOrder(w http.ResponseWriter, r *http.Request, proj *store.Project) {
@@ -633,3 +768,19 @@ Numbered list. Each item: one-line headline (bold), then a 1-2 sentence elaborat
 Numbered list, cross-referenced to weaknesses by number. Each item is a specific change the author should make ("replace X with Y", "drop the bullet about Z", "add a section on...").
 
 Keep total length under ~500 words. Never invent constraints not present in the doc; if the doc is too vague to critique a dimension, say so.`
+
+const systemBriefPrompt = `You are a research assistant producing a structured brief for an engineering project. Output Markdown with the following sections, in order, and NOTHING else:
+
+## Claims
+Numbered list. Each item: a single load-bearing claim about the topic the project is touching, expressed as a sentence the author should believe is true. 4-8 items.
+
+## Counter-claims
+Numbered list. For each claim above, surface the strongest opposing view someone would raise, or "—" if none. Reference the claim number.
+
+## Open questions
+Numbered list. 3-6 honest "I don't know" questions the author should resolve before committing to the approach.
+
+## Reading list
+Bulleted list (use '-'). Each line: a concrete thing to read or watch — paper title, blog post, talk, RFC, source-code module — followed by a 5-15 word reason. Prefer foundational references over recency. 4-10 items. One per line, no nested sub-bullets.
+
+Do not invent URLs you don't know exist. If you don't know a canonical reference, describe what to search for instead (e.g. "Original Raft paper by Ongaro & Ousterhout").`

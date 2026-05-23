@@ -43,6 +43,91 @@
   </article>
 </section>
 
+<section class="panel" id="brief-panel">
+  <header class="panel-head">
+    <h2>research brief</h2>
+    <form id="brief-form" data-project-id="{{.ID}}">
+      <input type="text" name="topic" placeholder="topic (defaults to project title)">
+      <button class="btn-primary" type="submit">request brief (pro)</button>
+      <span id="brief-spin" class="muted" hidden>streaming…</span>
+    </form>
+  </header>
+  <article id="brief-body" class="doc">
+    {{with $.Brief}}{{markdown .Body}}{{else}}<p class="muted">no brief yet. request one — pro will outline claims, counter-claims, open questions, and a reading list.</p>{{end}}
+  </article>
+  {{if $.BriefItems}}
+  <div class="brief-list-wrap">
+    <h3 class="brief-list-head">reading list</h3>
+    <ul class="brief-list">
+      {{range $.BriefItems}}
+      <li id="bi-{{.ID}}" class="brief-item {{if eq .Status "read"}}brief-item-read{{else if eq .Status "reading"}}brief-item-reading{{end}}">
+        <form hx-post="/briefs/{{.BriefID}}/items/{{.ID}}/status" hx-target="#bi-{{.ID}}" hx-swap="outerHTML" style="display:inline">
+          <input type="hidden" name="status" value="{{if eq .Status "read"}}unread{{else}}read{{end}}">
+          <button class="brief-check" type="submit" aria-label="toggle">{{if eq .Status "read"}}✓{{else}}○{{end}}</button>
+        </form>
+        <span class="brief-text">{{.Text}}</span>
+        <input class="brief-note" type="text" name="note" placeholder="note…" value="{{.Note}}"
+               hx-post="/briefs/{{.BriefID}}/items/{{.ID}}/note" hx-trigger="change" hx-swap="none">
+      </li>
+      {{end}}
+    </ul>
+  </div>
+  {{end}}
+</section>
+
+<script>
+(() => {
+  const form = document.getElementById("brief-form");
+  if (!form) return;
+  const out  = document.getElementById("brief-body");
+  const spin = document.getElementById("brief-spin");
+  const projectId = form.dataset.projectId;
+  form.addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    spin.hidden = false;
+    const res = await fetch(`/projects/${projectId}/brief`, { method: "POST", body: new FormData(form) });
+    if (!res.ok || !res.body) {
+      out.innerHTML = `<p class="err">brief failed (${res.status})</p>`;
+      spin.hidden = true; return;
+    }
+    out.innerHTML = `<pre class="stream-pre"></pre>`;
+    const pre = out.querySelector(".stream-pre");
+    const reader = res.body.getReader();
+    const dec = new TextDecoder();
+    let buffer = "", final = null;
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += dec.decode(value, { stream: true });
+      let idx;
+      while ((idx = buffer.indexOf("\n\n")) !== -1) {
+        const block = buffer.slice(0, idx); buffer = buffer.slice(idx + 2);
+        const evt = parseSSE(block);
+        if (evt.event === "delta")      pre.textContent += evt.data;
+        else if (evt.event === "end")   final = evt.data;
+        else if (evt.event === "error") { out.innerHTML = `<p class="err">${evt.data}</p>`; spin.hidden = true; return; }
+      }
+    }
+    if (final) {
+      out.innerHTML = final;
+      // reading list lives in a sibling container — easiest is full page refresh
+      window.location.reload();
+    }
+    spin.hidden = true;
+  });
+  function parseSSE(block) {
+    const out = { event: "delta", data: "" };
+    const lines = [];
+    for (const line of block.split("\n")) {
+      if (line.startsWith("event:")) out.event = line.slice(6).trim();
+      else if (line.startsWith("data:")) lines.push(line.slice(5).replace(/^ /, ""));
+    }
+    out.data = lines.join("\n");
+    return out;
+  }
+})();
+</script>
+
 <section class="panel">
   <header class="panel-head">
     <h2>standing orders</h2>
