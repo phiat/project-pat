@@ -42,6 +42,79 @@
     {{with $.Critique}}{{markdown .Body}}{{else}}<p class="muted">no critique yet. request one — a pro-tier critic will score the doc and suggest edits.</p>{{end}}
   </article>
 </section>
+
+<section class="panel">
+  <header class="panel-head">
+    <h2>standing orders</h2>
+    <span class="muted">agents that watch this project; the live design doc is injected into their prompt</span>
+  </header>
+  {{if $.Orders}}
+  <table class="table">
+    <thead><tr><th>name</th><th>model</th><th>cron</th><th></th></tr></thead>
+    <tbody>
+      {{range $.Orders}}
+      <tr>
+        <td>
+          <div class="row-title">{{.Name}}</div>
+          {{if .Purpose}}<div class="row-sub muted">{{.Purpose}}</div>{{end}}
+        </td>
+        <td><span class="mono">{{.Model}}</span></td>
+        <td><span class="mono">{{if .Cron}}{{.Cron}}{{else}}—{{end}}</span></td>
+        <td>
+          <form hx-post="/agents/{{.ID}}/run" hx-swap="none">
+            <button class="btn-ghost">run now</button>
+          </form>
+        </td>
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
+  {{else}}
+  <p class="muted">no standing orders yet.</p>
+  {{end}}
+
+  <details class="form-details">
+    <summary class="btn-ghost" style="display:inline-block">+ add standing order</summary>
+    <form class="form form-grid" hx-post="/projects/{{.ID}}/standing-orders" hx-swap="none">
+      <input type="text" name="name" placeholder="name (e.g. 'weekly prior-art scan')" required>
+      <input type="text" name="purpose" placeholder="purpose">
+      <input type="text" name="cron" placeholder="cron e.g. '0 8 * * 1'">
+      <select name="model">
+        <option value="flash">flash</option>
+        <option value="pro">pro</option>
+      </select>
+      <textarea name="system_prompt" rows="3" placeholder="system prompt" required></textarea>
+      <button type="submit">add</button>
+    </form>
+  </details>
+</section>
+
+{{if $.Timeline}}
+<section class="panel">
+  <header class="panel-head">
+    <h2>timeline</h2>
+    <span class="muted">recent runs touching this project</span>
+  </header>
+  <ul class="stack">
+    {{range $.Timeline}}
+    <li class="row">
+      <div class="row-main">
+        <div class="row-title">
+          {{if .AgentName}}{{.AgentName}}{{else}}ad-hoc{{end}}
+          · <span class="mono muted">{{.TriggerKind}}</span>
+          {{statusPill .Status}}
+        </div>
+        {{if .Output}}<div class="row-sub muted">{{truncate .Output 200}}</div>{{end}}
+      </div>
+      <div class="row-actions">
+        <span class="muted">{{date .StartedAt}}</span>
+        <span class="muted">{{.TokensIn}} → {{.TokensOut}}</span>
+      </div>
+    </li>
+    {{end}}
+  </ul>
+</section>
+{{end}}
 {{end}}
 
 <script>

@@ -232,10 +232,14 @@ func (h *Handler) projectActions(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(parts) == 2 {
 		critique, _ := h.S.LatestArtifact(proj.ID, "critique")
+		orders, _ := h.S.ListAgentsForProject(proj.ID)
+		timeline, _ := h.S.RunsForProject(proj.ID, 12)
 		h.render(w, "project_detail", map[string]any{
 			"Title":    proj.Title,
 			"Project":  proj,
 			"Critique": critique,
+			"Orders":   orders,
+			"Timeline": timeline,
 		})
 		return
 	}
@@ -250,9 +254,34 @@ func (h *Handler) projectActions(w http.ResponseWriter, r *http.Request) {
 		case "apply-critique":
 			h.streamApplyCritique(w, r, proj)
 			return
+		case "standing-orders":
+			h.createStandingOrder(w, r, proj)
+			return
 		}
 	}
 	http.NotFound(w, r)
+}
+
+func (h *Handler) createStandingOrder(w http.ResponseWriter, r *http.Request, proj *store.Project) {
+	a := store.Agent{
+		Name:         strings.TrimSpace(r.FormValue("name")),
+		Purpose:      strings.TrimSpace(r.FormValue("purpose")),
+		SystemPrompt: strings.TrimSpace(r.FormValue("system_prompt")),
+		Model:        strings.TrimSpace(r.FormValue("model")),
+		Cron:         strings.TrimSpace(r.FormValue("cron")),
+		Enabled:      true,
+		ProjectID:    sql.NullInt64{Int64: proj.ID, Valid: true},
+	}
+	if a.Name == "" || a.SystemPrompt == "" {
+		http.Error(w, "name and system_prompt required", 400)
+		return
+	}
+	if _, err := h.S.CreateAgent(a); err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	w.Header().Set("HX-Refresh", "true")
+	w.WriteHeader(204)
 }
 
 func (h *Handler) streamCritique(w http.ResponseWriter, r *http.Request, proj *store.Project) {
@@ -420,8 +449,21 @@ func (h *Handler) agentActions(w http.ResponseWriter, r *http.Request) {
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
 		defer cancel()
-		runID, _ := h.S.StartRun(sql.NullInt64{Int64: agent.ID, Valid: true}, sql.NullInt64{}, "manual", agent.SystemPrompt)
-		res, err := h.LLM.Complete(ctx, agent.Model, agent.SystemPrompt, fmt.Sprintf("Run mission: %s. Produce a structured report.", agent.Purpose))
+
+		var projID sql.NullInt64
+		userPrompt := fmt.Sprintf("Run mission: %s. Produce a structured report.", agent.Purpose)
+		if agent.ProjectID.Valid {
+			projID = agent.ProjectID
+			if proj, err := h.S.GetProject(agent.ProjectID.Int64); err == nil {
+				userPrompt = fmt.Sprintf(
+					"Run mission for project %q. Purpose: %s.\n\nLive design doc:\n\n%s\n\nProduce a structured report.",
+					proj.Title, agent.Purpose, proj.DesignDoc,
+				)
+			}
+		}
+
+		runID, _ := h.S.StartRun(sql.NullInt64{Int64: agent.ID, Valid: true}, projID, "manual", agent.SystemPrompt)
+		res, err := h.LLM.Complete(ctx, agent.Model, agent.SystemPrompt, userPrompt)
 		if err != nil {
 			log.Printf("agent #%d run failed: %v", agent.ID, err)
 			_ = h.S.FinishRun(runID, "failed", "", err.Error(), 0, 0)

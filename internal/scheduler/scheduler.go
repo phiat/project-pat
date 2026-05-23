@@ -100,8 +100,21 @@ func (sc *Scheduler) reloadLoop() {
 func (sc *Scheduler) runAgent(a store.Agent) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	runID, _ := sc.store.StartRun(sql.NullInt64{Int64: a.ID, Valid: true}, sql.NullInt64{}, "cron", a.SystemPrompt)
-	res, err := sc.llm.Complete(ctx, a.Model, a.SystemPrompt, fmt.Sprintf("Scheduled mission. Purpose: %s. Produce a concise structured report.", a.Purpose))
+
+	var projID sql.NullInt64
+	userPrompt := fmt.Sprintf("Scheduled mission. Purpose: %s. Produce a concise structured report.", a.Purpose)
+	if a.ProjectID.Valid {
+		projID = a.ProjectID
+		if proj, err := sc.store.GetProject(a.ProjectID.Int64); err == nil {
+			userPrompt = fmt.Sprintf(
+				"Scheduled mission for project %q. Purpose: %s.\n\nLive design doc:\n\n%s\n\nProduce a concise structured report relevant to the project's current state.",
+				proj.Title, a.Purpose, proj.DesignDoc,
+			)
+		}
+	}
+
+	runID, _ := sc.store.StartRun(sql.NullInt64{Int64: a.ID, Valid: true}, projID, "cron", a.SystemPrompt)
+	res, err := sc.llm.Complete(ctx, a.Model, a.SystemPrompt, userPrompt)
 	if err != nil {
 		log.Printf("scheduler: agent %s failed: %v", a.Name, err)
 		_ = sc.store.FinishRun(runID, "failed", "", err.Error(), 0, 0)

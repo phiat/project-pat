@@ -39,6 +39,7 @@ type Agent struct {
 	Model        string
 	Cron         string
 	Enabled      bool
+	ProjectID    sql.NullInt64
 	CreatedAt    time.Time
 }
 
@@ -145,8 +146,8 @@ func (s *Store) UpdateProjectDoc(id int64, designDoc string) error {
 
 func (s *Store) CreateAgent(a Agent) (int64, error) {
 	res, err := s.DB.Exec(
-		`INSERT INTO agents(name, purpose, system_prompt, model, cron, enabled) VALUES(?,?,?,?,?,?)`,
-		a.Name, a.Purpose, a.SystemPrompt, ifEmpty(a.Model, "flash"), a.Cron, boolToInt(a.Enabled),
+		`INSERT INTO agents(name, purpose, system_prompt, model, cron, enabled, project_id) VALUES(?,?,?,?,?,?,?)`,
+		a.Name, a.Purpose, a.SystemPrompt, ifEmpty(a.Model, "flash"), a.Cron, boolToInt(a.Enabled), a.ProjectID,
 	)
 	if err != nil {
 		return 0, err
@@ -155,7 +156,7 @@ func (s *Store) CreateAgent(a Agent) (int64, error) {
 }
 
 func (s *Store) ListAgents() ([]Agent, error) {
-	rows, err := s.DB.Query(`SELECT id, name, purpose, system_prompt, model, cron, enabled, created_at FROM agents ORDER BY id DESC`)
+	rows, err := s.DB.Query(`SELECT id, name, purpose, system_prompt, model, cron, enabled, project_id, created_at FROM agents ORDER BY id DESC`)
 	if err != nil {
 		return nil, err
 	}
@@ -164,7 +165,29 @@ func (s *Store) ListAgents() ([]Agent, error) {
 	for rows.Next() {
 		var a Agent
 		var enabled int
-		if err := rows.Scan(&a.ID, &a.Name, &a.Purpose, &a.SystemPrompt, &a.Model, &a.Cron, &enabled, &a.CreatedAt); err != nil {
+		if err := rows.Scan(&a.ID, &a.Name, &a.Purpose, &a.SystemPrompt, &a.Model, &a.Cron, &enabled, &a.ProjectID, &a.CreatedAt); err != nil {
+			return nil, err
+		}
+		a.Enabled = enabled != 0
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) ListAgentsForProject(projectID int64) ([]Agent, error) {
+	rows, err := s.DB.Query(
+		`SELECT id, name, purpose, system_prompt, model, cron, enabled, project_id, created_at
+         FROM agents WHERE project_id = ? ORDER BY id DESC`, projectID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Agent
+	for rows.Next() {
+		var a Agent
+		var enabled int
+		if err := rows.Scan(&a.ID, &a.Name, &a.Purpose, &a.SystemPrompt, &a.Model, &a.Cron, &enabled, &a.ProjectID, &a.CreatedAt); err != nil {
 			return nil, err
 		}
 		a.Enabled = enabled != 0
@@ -174,14 +197,42 @@ func (s *Store) ListAgents() ([]Agent, error) {
 }
 
 func (s *Store) GetAgent(id int64) (*Agent, error) {
-	row := s.DB.QueryRow(`SELECT id, name, purpose, system_prompt, model, cron, enabled, created_at FROM agents WHERE id=?`, id)
+	row := s.DB.QueryRow(`SELECT id, name, purpose, system_prompt, model, cron, enabled, project_id, created_at FROM agents WHERE id=?`, id)
 	var a Agent
 	var enabled int
-	if err := row.Scan(&a.ID, &a.Name, &a.Purpose, &a.SystemPrompt, &a.Model, &a.Cron, &enabled, &a.CreatedAt); err != nil {
+	if err := row.Scan(&a.ID, &a.Name, &a.Purpose, &a.SystemPrompt, &a.Model, &a.Cron, &enabled, &a.ProjectID, &a.CreatedAt); err != nil {
 		return nil, err
 	}
 	a.Enabled = enabled != 0
 	return &a, nil
+}
+
+// RunsForProject returns recent runs filtered by project_id (via agent or
+// direct project association). Used for the project-detail timeline.
+func (s *Store) RunsForProject(projectID int64, limit int) ([]Run, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+	rows, err := s.DB.Query(`
+        SELECT r.id, r.agent_id, COALESCE(a.name,''), r.project_id, r.trigger_kind, r.status,
+               r.prompt, r.output, r.error, r.tokens_in, r.tokens_out, r.started_at, r.finished_at
+        FROM runs r LEFT JOIN agents a ON a.id = r.agent_id
+        WHERE r.project_id = ? OR (a.project_id = ?)
+        ORDER BY r.id DESC LIMIT ?`, projectID, projectID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Run
+	for rows.Next() {
+		var r Run
+		if err := rows.Scan(&r.ID, &r.AgentID, &r.AgentName, &r.ProjectID, &r.TriggerKind, &r.Status,
+			&r.Prompt, &r.Output, &r.Error, &r.TokensIn, &r.TokensOut, &r.StartedAt, &r.FinishedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
 }
 
 // Runs

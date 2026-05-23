@@ -53,6 +53,7 @@ CREATE TABLE IF NOT EXISTS agents (
     model         TEXT NOT NULL DEFAULT 'flash',
     cron          TEXT NOT NULL DEFAULT '',
     enabled       INTEGER NOT NULL DEFAULT 1,
+    project_id    INTEGER REFERENCES projects(id) ON DELETE SET NULL,
     created_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -99,7 +100,40 @@ func migrate(db *sql.DB) error {
 	if _, err := db.Exec(schema); err != nil {
 		return err
 	}
-	return renameLegacyTriggerColumn(db)
+	if err := renameLegacyTriggerColumn(db); err != nil {
+		return err
+	}
+	return addAgentProjectColumn(db)
+}
+
+func addAgentProjectColumn(db *sql.DB) error {
+	has, err := columnExists(db, "agents", "project_id")
+	if err != nil || has {
+		return err
+	}
+	_, err = db.Exec(`ALTER TABLE agents ADD COLUMN project_id INTEGER REFERENCES projects(id) ON DELETE SET NULL`)
+	return err
+}
+
+func columnExists(db *sql.DB, table, col string) (bool, error) {
+	rows, err := db.Query(`PRAGMA table_info(` + table + `)`)
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var name, ctype string
+		var notnull, pk int
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			return false, err
+		}
+		if name == col {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
 }
 
 func renameLegacyTriggerColumn(db *sql.DB) error {
