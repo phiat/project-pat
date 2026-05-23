@@ -230,6 +230,62 @@ func (s *Store) ListRuns(limit int) ([]Run, error) {
 	return out, rows.Err()
 }
 
+// Artifacts
+
+type Artifact struct {
+	ID        int64
+	ProjectID int64
+	Kind      string
+	Title     string
+	Body      string
+	CreatedAt time.Time
+}
+
+func (s *Store) CreateArtifact(a Artifact) (int64, error) {
+	res, err := s.DB.Exec(
+		`INSERT INTO artifacts(project_id, kind, title, body) VALUES(?,?,?,?)`,
+		a.ProjectID, a.Kind, a.Title, a.Body,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return res.LastInsertId()
+}
+
+func (s *Store) ListArtifacts(projectID int64, kind string) ([]Artifact, error) {
+	rows, err := s.DB.Query(
+		`SELECT id, project_id, kind, title, body, created_at FROM artifacts
+         WHERE project_id=? AND kind=? ORDER BY id DESC`,
+		projectID, kind,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Artifact
+	for rows.Next() {
+		var a Artifact
+		if err := rows.Scan(&a.ID, &a.ProjectID, &a.Kind, &a.Title, &a.Body, &a.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) LatestArtifact(projectID int64, kind string) (*Artifact, error) {
+	row := s.DB.QueryRow(
+		`SELECT id, project_id, kind, title, body, created_at FROM artifacts
+         WHERE project_id=? AND kind=? ORDER BY id DESC LIMIT 1`,
+		projectID, kind,
+	)
+	var a Artifact
+	if err := row.Scan(&a.ID, &a.ProjectID, &a.Kind, &a.Title, &a.Body, &a.CreatedAt); err != nil {
+		return nil, err
+	}
+	return &a, nil
+}
+
 // helpers
 
 func ifEmpty(s, d string) string {

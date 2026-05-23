@@ -228,14 +228,96 @@ func (h *Handler) projectActions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if len(parts) == 2 {
-		h.render(w, "project_detail", map[string]any{"Title": proj.Title, "Project": proj})
+		critique, _ := h.S.LatestArtifact(proj.ID, "critique")
+		h.render(w, "project_detail", map[string]any{
+			"Title":    proj.Title,
+			"Project":  proj,
+			"Critique": critique,
+		})
 		return
 	}
-	if len(parts) == 3 && parts[2] == "draft" && r.Method == http.MethodPost {
-		h.streamDraft(w, r, proj)
-		return
+	if len(parts) == 3 && r.Method == http.MethodPost {
+		switch parts[2] {
+		case "draft":
+			h.streamDraft(w, r, proj)
+			return
+		case "critique":
+			h.streamCritique(w, r, proj)
+			return
+		case "apply-critique":
+			h.streamApplyCritique(w, r, proj)
+			return
+		}
 	}
 	http.NotFound(w, r)
+}
+
+func (h *Handler) streamCritique(w http.ResponseWriter, r *http.Request, proj *store.Project) {
+	if strings.TrimSpace(proj.DesignDoc) == "" {
+		http.Error(w, "no design doc to critique", 400)
+		return
+	}
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming unsupported", 500)
+		return
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("X-Accel-Buffering", "no")
+	w.WriteHeader(200)
+
+	ctx, cancel := context.WithTimeout(r.Context(), 240*time.Second)
+	defer cancel()
+
+	userPrompt := fmt.Sprintf("Project: %s\n\nDesign doc:\n\n%s", proj.Title, proj.DesignDoc)
+	runID, _ := h.S.StartRun(sql.NullInt64{}, sql.NullInt64{Int64: proj.ID, Valid: true}, "critique", userPrompt)
+	res, err := h.LLM.CompleteStream(ctx, llm.ModelProKey, systemCritiquePrompt, userPrompt,
+		func(chunk string) { writeSSE(w, flusher, "delta", chunk) })
+	if err != nil {
+		_ = h.S.FinishRun(runID, "failed", "", err.Error(), 0, 0)
+		writeSSE(w, flusher, "error", "critique failed: "+err.Error())
+		return
+	}
+	_ = h.S.FinishRun(runID, "ok", res.Text, "", res.TokensIn, res.TokensOut)
+	if _, err := h.S.CreateArtifact(store.Artifact{ProjectID: proj.ID, Kind: "critique", Body: res.Text}); err != nil {
+		log.Printf("critique store: %v", err)
+	}
+	writeSSE(w, flusher, "end", string(web.RenderMarkdown(res.Text)))
+}
+
+func (h *Handler) streamApplyCritique(w http.ResponseWriter, r *http.Request, proj *store.Project) {
+	crit, err := h.S.LatestArtifact(proj.ID, "critique")
+	if err != nil {
+		http.Error(w, "no critique to apply", 400)
+		return
+	}
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming unsupported", 500)
+		return
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("X-Accel-Buffering", "no")
+	w.WriteHeader(200)
+
+	ctx, cancel := context.WithTimeout(r.Context(), 240*time.Second)
+	defer cancel()
+
+	userPrompt := fmt.Sprintf("Project: %s\n\nExisting design doc:\n\n%s\n\nCritique to address:\n\n%s\n\nProduce a revised design doc that addresses each numbered point in the critique. Preserve sections that the critique didn't flag.",
+		proj.Title, proj.DesignDoc, crit.Body)
+	runID, _ := h.S.StartRun(sql.NullInt64{}, sql.NullInt64{Int64: proj.ID, Valid: true}, "apply-critique", userPrompt)
+	res, err := h.LLM.CompleteStream(ctx, llm.ModelProKey, systemDesignDocPrompt, userPrompt,
+		func(chunk string) { writeSSE(w, flusher, "delta", chunk) })
+	if err != nil {
+		_ = h.S.FinishRun(runID, "failed", "", err.Error(), 0, 0)
+		writeSSE(w, flusher, "error", "apply failed: "+err.Error())
+		return
+	}
+	_ = h.S.FinishRun(runID, "ok", res.Text, "", res.TokensIn, res.TokensOut)
+	_ = h.S.UpdateProjectDoc(proj.ID, res.Text)
+	writeSSE(w, flusher, "end", string(web.RenderMarkdown(res.Text)))
 }
 
 func (h *Handler) streamDraft(w http.ResponseWriter, r *http.Request, proj *store.Project) {
@@ -408,3 +490,16 @@ func truncate(s string, n int) string {
 const systemSeedPrompt = `You are an idea-seeding assistant. Given a rough title and optional context, output a tight Markdown sketch with: (1) one-line crystallized framing, (2) why now / who cares, (3) 3-5 angles to explore, (4) the smallest possible first slice. Keep it under 250 words.`
 
 const systemDesignDocPrompt = `You are a senior engineer drafting a design doc. Output Markdown with: ## Problem, ## Goals, ## Non-goals, ## Approach, ## Data model, ## Open questions, ## First slice. Be concrete and brief; favor short bullets over prose. If an existing doc is provided, refine it rather than rewrite from scratch.`
+
+const systemCritiquePrompt = `You are a senior engineer reviewing a design doc. Be skeptical but constructive. Output Markdown:
+
+## Scorecard
+A short table with rows: clarity / feasibility / risk surface / novelty / first-slice realism. Each scored 1-10 with a 5-15 word justification.
+
+## Weaknesses
+Numbered list. Each item: one-line headline (bold), then a 1-2 sentence elaboration that names the specific section or claim being critiqued.
+
+## Concrete edits
+Numbered list, cross-referenced to weaknesses by number. Each item is a specific change the author should make ("replace X with Y", "drop the bullet about Z", "add a section on...").
+
+Keep total length under ~500 words. Never invent constraints not present in the doc; if the doc is too vague to critique a dimension, say so.`

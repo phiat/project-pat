@@ -24,82 +24,91 @@
       <span id="doc-spin" class="muted" hidden>streaming…</span>
     </form>
   </header>
-  <article id="doc" class="doc" data-rendered="{{if .DesignDoc}}1{{else}}0{{end}}">
+  <article id="doc" class="doc">
     {{if .DesignDoc}}{{markdown .DesignDoc}}{{else}}<p class="muted">no doc yet. click draft to generate.</p>{{end}}
   </article>
 </section>
 
+<section class="panel" id="critique-panel" data-project-id="{{.ID}}">
+  <header class="panel-head">
+    <h2>critique</h2>
+    <div>
+      <button id="critique-btn" class="btn-ghost" type="button">request critique (pro)</button>
+      <button id="apply-btn" class="btn-primary" type="button" {{if not $.Critique}}disabled{{end}}>apply critique →</button>
+      <span id="crit-spin" class="muted" hidden>streaming…</span>
+    </div>
+  </header>
+  <article id="crit" class="doc">
+    {{with $.Critique}}{{markdown .Body}}{{else}}<p class="muted">no critique yet. request one — a pro-tier critic will score the doc and suggest edits.</p>{{end}}
+  </article>
+</section>
+{{end}}
+
 <script>
 (() => {
-  const form = document.getElementById("draft-form");
-  const doc  = document.getElementById("doc");
-  const spin = document.getElementById("doc-spin");
-  const projectId = form.dataset.projectId;
-  let streaming = false;
+  const projectId = {{.Project.ID}};
+  setupStream("draft-form",   `/projects/${projectId}/draft`,           "doc",  "doc-spin");
+  setupStreamButton("critique-btn",  `/projects/${projectId}/critique`, "crit", "crit-spin", () => {
+    document.getElementById("apply-btn").disabled = false;
+  });
+  setupStreamButton("apply-btn",     `/projects/${projectId}/apply-critique`, "doc", "crit-spin");
 
-  form.addEventListener("submit", async (ev) => {
-    ev.preventDefault();
-    if (streaming) return;
-    streaming = true;
-    spin.hidden = false;
-
-    const fd = new FormData(form);
-    const res = await fetch(`/projects/${projectId}/draft`, {
-      method: "POST",
-      body:   fd,
-      headers: { "Accept": "text/event-stream" },
+  function setupStream(formId, url, outId, spinId) {
+    const form = document.getElementById(formId);
+    if (!form) return;
+    form.addEventListener("submit", (ev) => { ev.preventDefault(); runStream(url, new FormData(form), outId, spinId); });
+  }
+  function setupStreamButton(btnId, url, outId, spinId, onDone) {
+    const btn = document.getElementById(btnId);
+    if (!btn) return;
+    btn.addEventListener("click", async () => {
+      btn.disabled = true;
+      try { await runStream(url, new FormData(), outId, spinId, onDone); }
+      finally { btn.disabled = false; }
     });
+  }
+  async function runStream(url, body, outId, spinId, onDone) {
+    const out  = document.getElementById(outId);
+    const spin = document.getElementById(spinId);
+    spin.hidden = false;
+    const res = await fetch(url, { method: "POST", body });
     if (!res.ok || !res.body) {
-      doc.innerHTML = `<p class="err">draft failed (${res.status})</p>`;
-      streaming = false; spin.hidden = true; return;
+      out.innerHTML = `<p class="err">request failed (${res.status})</p>`;
+      spin.hidden = true; return;
     }
-
-    doc.innerHTML = `<pre id="doc-stream"></pre>`;
-    const pre = doc.querySelector("#doc-stream");
-
+    out.innerHTML = `<pre class="stream-pre"></pre>`;
+    const pre = out.querySelector(".stream-pre");
     const reader = res.body.getReader();
     const dec = new TextDecoder();
-    let buffer = "";
-    let final = null;
-
+    let buffer = "", final = null;
     while (true) {
       const { value, done } = await reader.read();
       if (done) break;
       buffer += dec.decode(value, { stream: true });
       let idx;
       while ((idx = buffer.indexOf("\n\n")) !== -1) {
-        const block = buffer.slice(0, idx);
-        buffer = buffer.slice(idx + 2);
+        const block = buffer.slice(0, idx); buffer = buffer.slice(idx + 2);
         const evt = parseSSE(block);
-        if (evt.event === "delta") {
-          pre.textContent += evt.data;
-        } else if (evt.event === "end") {
-          final = evt.data;
-        } else if (evt.event === "error") {
-          doc.innerHTML = `<p class="err">${escapeHTML(evt.data)}</p>`;
-          streaming = false; spin.hidden = true; return;
-        }
+        if (evt.event === "delta")      pre.textContent += evt.data;
+        else if (evt.event === "end")   final = evt.data;
+        else if (evt.event === "error") { out.innerHTML = `<p class="err">${escapeHTML(evt.data)}</p>`; spin.hidden = true; return; }
       }
     }
-    if (final) doc.innerHTML = final;
-    streaming = false;
+    if (final) out.innerHTML = final;
     spin.hidden = true;
-  });
-
+    if (onDone) onDone();
+  }
   function parseSSE(block) {
     const out = { event: "delta", data: "" };
-    const dataLines = [];
+    const lines = [];
     for (const line of block.split("\n")) {
       if (line.startsWith("event:")) out.event = line.slice(6).trim();
-      else if (line.startsWith("data:")) dataLines.push(line.slice(5).replace(/^ /, ""));
+      else if (line.startsWith("data:")) lines.push(line.slice(5).replace(/^ /, ""));
     }
-    out.data = dataLines.join("\n");
+    out.data = lines.join("\n");
     return out;
   }
-  function escapeHTML(s) {
-    return s.replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]));
-  }
+  function escapeHTML(s) { return s.replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c])); }
 })();
 </script>
-{{end}}
 {{end}}
