@@ -22,10 +22,18 @@ type Handler struct {
 	S   *store.Store
 	LLM *llm.Client
 	R   *web.Renderer
+	// RootCtx is cancelled when the server is shutting down. Background
+	// work (e.g. manual agent runs that outlive the originating request)
+	// should derive from this so it stops cleanly on Ctrl-C.
+	RootCtx context.Context
+	// OnAgentChanged, if set, is called after an agent is created/updated
+	// so the scheduler can re-read its set immediately rather than waiting
+	// for the next 30s tick.
+	OnAgentChanged func()
 }
 
 func New(s *store.Store, l *llm.Client, r *web.Renderer) *Handler {
-	return &Handler{S: s, LLM: l, R: r}
+	return &Handler{S: s, LLM: l, R: r, RootCtx: context.Background()}
 }
 
 func (h *Handler) Mount(mux *http.ServeMux) {
@@ -122,30 +130,14 @@ func (h *Handler) quickDraft(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), 500)
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 120*time.Second)
-	defer cancel()
-
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		http.Error(w, "streaming unsupported", 500)
-		return
-	}
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("X-Accel-Buffering", "no")
-	w.WriteHeader(200)
-
-	writeSSE(w, flusher, "meta", fmt.Sprintf("idea #%d", ideaID))
-	runID, _ := h.S.StartRun(sql.NullInt64{}, sql.NullInt64{}, "quick-draft", title+"\n\n"+body)
-	res, err := h.LLM.CompleteStream(ctx, llm.ModelFlashKey, systemSeedPrompt, fmt.Sprintf("Title: %s\n\nContext:\n%s", title, body),
-		func(chunk string) { writeSSE(w, flusher, "delta", chunk) })
-	if err != nil {
-		_ = h.S.FinishRun(runID, "failed", "", err.Error(), 0, 0)
-		writeSSE(w, flusher, "error", "draft failed: "+err.Error())
-		return
-	}
-	_ = h.S.FinishRun(runID, "ok", res.Text, "", res.TokensIn, res.TokensOut)
-	writeSSE(w, flusher, "end", string(web.RenderMarkdown(res.Text)))
+	h.streamSSE(w, r, streamSpec{
+		trigger:   "quick-draft",
+		modelKey:  llm.ModelFlashKey,
+		system:    systemSeedPrompt,
+		user:      fmt.Sprintf("Title: %s\n\nContext:\n%s", title, body),
+		timeout:   120 * time.Second,
+		preEvents: []sseEvent{{Event: "meta", Data: fmt.Sprintf("idea #%d", ideaID)}},
+	})
 }
 
 func (h *Handler) ideaActions(w http.ResponseWriter, r *http.Request) {
@@ -570,19 +562,6 @@ func (h *Handler) stackContext(projectID int64) string {
 }
 
 func (h *Handler) streamBrief(w http.ResponseWriter, r *http.Request, proj *store.Project) {
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		http.Error(w, "streaming unsupported", 500)
-		return
-	}
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("X-Accel-Buffering", "no")
-	w.WriteHeader(200)
-
-	ctx, cancel := context.WithTimeout(r.Context(), 240*time.Second)
-	defer cancel()
-
 	topic := strings.TrimSpace(r.FormValue("topic"))
 	if topic == "" {
 		topic = proj.Title
@@ -591,29 +570,28 @@ func (h *Handler) streamBrief(w http.ResponseWriter, r *http.Request, proj *stor
 		"Project: %s\nSummary: %s\n\nTopic to research: %s\n\nProduce a research brief.",
 		proj.Title, proj.Summary, topic,
 	)
-	runID, _ := h.S.StartRun(sql.NullInt64{}, sql.NullInt64{Int64: proj.ID, Valid: true}, "brief", userPrompt)
-	res, err := h.LLM.CompleteStream(ctx, llm.ModelProKey, systemBriefPrompt, userPrompt,
-		func(chunk string) { writeSSE(w, flusher, "delta", chunk) })
-	if err != nil {
-		_ = h.S.FinishRun(runID, "failed", "", err.Error(), 0, 0)
-		writeSSE(w, flusher, "error", "brief failed: "+err.Error())
-		return
-	}
-	_ = h.S.FinishRun(runID, "ok", res.Text, "", res.TokensIn, res.TokensOut)
-
-	briefID, err := h.S.CreateArtifact(store.Artifact{
-		ProjectID: proj.ID, Kind: "brief", Title: topic, Body: res.Text,
+	h.streamSSE(w, r, streamSpec{
+		trigger:   "brief",
+		projectID: sql.NullInt64{Int64: proj.ID, Valid: true},
+		modelKey:  llm.ModelProKey,
+		system:    systemBriefPrompt,
+		user:      userPrompt,
+		timeout:   240 * time.Second,
+		onSuccess: func(text string, runID int64) (string, string) {
+			briefID, err := h.S.CreateArtifact(store.Artifact{
+				ProjectID: proj.ID, Kind: "brief", Title: topic, Body: text,
+			})
+			if err != nil {
+				log.Printf("brief artifact: %v", err)
+			}
+			if items := web.ExtractReadingList(text); len(items) > 0 && briefID > 0 {
+				if err := h.S.CreateBriefItems(briefID, items); err != nil {
+					log.Printf("brief items: %v", err)
+				}
+			}
+			return string(web.RenderMarkdown(text)), ""
+		},
 	})
-	if err != nil {
-		log.Printf("brief artifact: %v", err)
-	}
-	if items := web.ExtractReadingList(res.Text); len(items) > 0 && briefID > 0 {
-		if err := h.S.CreateBriefItems(briefID, items); err != nil {
-			log.Printf("brief items: %v", err)
-		}
-	}
-
-	writeSSE(w, flusher, "end", string(web.RenderMarkdown(res.Text)))
 }
 
 func (h *Handler) briefActions(w http.ResponseWriter, r *http.Request) {
@@ -711,6 +689,9 @@ func (h *Handler) createStandingOrder(w http.ResponseWriter, r *http.Request, pr
 		http.Error(w, err.Error(), 500)
 		return
 	}
+	if h.OnAgentChanged != nil {
+		h.OnAgentChanged()
+	}
 	w.Header().Set("HX-Refresh", "true")
 	w.WriteHeader(204)
 }
@@ -720,37 +701,25 @@ func (h *Handler) streamCritique(w http.ResponseWriter, r *http.Request, proj *s
 		http.Error(w, "no design doc to critique", 400)
 		return
 	}
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		http.Error(w, "streaming unsupported", 500)
-		return
-	}
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("X-Accel-Buffering", "no")
-	w.WriteHeader(200)
-
-	ctx, cancel := context.WithTimeout(r.Context(), 240*time.Second)
-	defer cancel()
-
 	focus := strings.TrimSpace(r.FormValue("focus"))
 	userPrompt := h.stackContext(proj.ID) + fmt.Sprintf("Project: %s\n\nDesign doc:\n\n%s", proj.Title, proj.DesignDoc)
 	if focus != "" {
 		userPrompt += "\n\nFocus this critique on: " + focus
 	}
-	runID, _ := h.S.StartRun(sql.NullInt64{}, sql.NullInt64{Int64: proj.ID, Valid: true}, "critique", userPrompt)
-	res, err := h.LLM.CompleteStream(ctx, llm.ModelProKey, systemCritiquePrompt, userPrompt,
-		func(chunk string) { writeSSE(w, flusher, "delta", chunk) })
-	if err != nil {
-		_ = h.S.FinishRun(runID, "failed", "", err.Error(), 0, 0)
-		writeSSE(w, flusher, "error", "critique failed: "+err.Error())
-		return
-	}
-	_ = h.S.FinishRun(runID, "ok", res.Text, "", res.TokensIn, res.TokensOut)
-	if _, err := h.S.CreateArtifact(store.Artifact{ProjectID: proj.ID, Kind: "critique", Body: res.Text}); err != nil {
-		log.Printf("critique store: %v", err)
-	}
-	writeSSE(w, flusher, "end", string(web.RenderMarkdown(res.Text)))
+	h.streamSSE(w, r, streamSpec{
+		trigger:   "critique",
+		projectID: sql.NullInt64{Int64: proj.ID, Valid: true},
+		modelKey:  llm.ModelProKey,
+		system:    systemCritiquePrompt,
+		user:      userPrompt,
+		timeout:   240 * time.Second,
+		onSuccess: func(text string, runID int64) (string, string) {
+			if _, err := h.S.CreateArtifact(store.Artifact{ProjectID: proj.ID, Kind: "critique", Body: text}); err != nil {
+				log.Printf("critique artifact: %v", err)
+			}
+			return string(web.RenderMarkdown(text)), ""
+		},
+	})
 }
 
 func (h *Handler) streamApplyCritique(w http.ResponseWriter, r *http.Request, proj *store.Project) {
@@ -759,36 +728,26 @@ func (h *Handler) streamApplyCritique(w http.ResponseWriter, r *http.Request, pr
 		http.Error(w, "no critique to apply", 400)
 		return
 	}
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		http.Error(w, "streaming unsupported", 500)
-		return
-	}
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("X-Accel-Buffering", "no")
-	w.WriteHeader(200)
-
-	ctx, cancel := context.WithTimeout(r.Context(), 240*time.Second)
-	defer cancel()
-
 	focus := strings.TrimSpace(r.FormValue("focus"))
 	userPrompt := h.stackContext(proj.ID) + fmt.Sprintf("Project: %s\n\nExisting design doc:\n\n%s\n\nCritique to address:\n\n%s\n\nProduce a revised design doc that addresses each numbered point in the critique. Preserve sections that the critique didn't flag.",
 		proj.Title, proj.DesignDoc, crit.Body)
 	if focus != "" {
 		userPrompt += "\n\nWhile applying the critique, prioritise: " + focus
 	}
-	runID, _ := h.S.StartRun(sql.NullInt64{}, sql.NullInt64{Int64: proj.ID, Valid: true}, "apply-critique", userPrompt)
-	res, err := h.LLM.CompleteStream(ctx, llm.ModelProKey, systemDesignDocPrompt, userPrompt,
-		func(chunk string) { writeSSE(w, flusher, "delta", chunk) })
-	if err != nil {
-		_ = h.S.FinishRun(runID, "failed", "", err.Error(), 0, 0)
-		writeSSE(w, flusher, "error", "apply failed: "+err.Error())
-		return
-	}
-	_ = h.S.FinishRun(runID, "ok", res.Text, "", res.TokensIn, res.TokensOut)
-	_ = h.S.UpdateProjectDoc(proj.ID, res.Text)
-	writeSSE(w, flusher, "end", string(web.RenderMarkdown(res.Text)))
+	h.streamSSE(w, r, streamSpec{
+		trigger:   "apply-critique",
+		projectID: sql.NullInt64{Int64: proj.ID, Valid: true},
+		modelKey:  llm.ModelProKey,
+		system:    systemDesignDocPrompt,
+		user:      userPrompt,
+		timeout:   240 * time.Second,
+		onSuccess: func(text string, runID int64) (string, string) {
+			if err := h.S.UpdateProjectDoc(proj.ID, text); err != nil {
+				log.Printf("updateProjectDoc(%d): %v", proj.ID, err)
+			}
+			return string(web.RenderMarkdown(text)), ""
+		},
+	})
 }
 
 func (h *Handler) streamDraft(w http.ResponseWriter, r *http.Request, proj *store.Project) {
@@ -797,47 +756,129 @@ func (h *Handler) streamDraft(w http.ResponseWriter, r *http.Request, proj *stor
 		modelKey = llm.ModelFlashKey
 	}
 	focus := strings.TrimSpace(r.FormValue("focus"))
-	ctx, cancel := context.WithTimeout(r.Context(), 180*time.Second)
-	defer cancel()
-
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		http.Error(w, "streaming unsupported", 500)
-		return
-	}
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("X-Accel-Buffering", "no")
-	w.WriteHeader(200)
 
 	userPrompt := h.stackContext(proj.ID) + fmt.Sprintf("Project title: %s\nSummary: %s\n\nExisting doc (may be empty):\n%s\n\nProduce or refine the design doc.",
 		proj.Title, proj.Summary, proj.DesignDoc)
 	if focus != "" {
 		userPrompt += "\n\nFocus this pass on: " + focus
 	}
-	runID, _ := h.S.StartRun(sql.NullInt64{}, sql.NullInt64{Int64: proj.ID, Valid: true}, "project-draft", userPrompt)
 
-	res, err := h.LLM.CompleteStream(ctx, modelKey, systemDesignDocPrompt, userPrompt, func(chunk string) {
-		writeSSE(w, flusher, "delta", chunk)
+	h.streamSSE(w, r, streamSpec{
+		trigger:   "project-draft",
+		projectID: sql.NullInt64{Int64: proj.ID, Valid: true},
+		modelKey:  modelKey,
+		system:    systemDesignDocPrompt,
+		user:      userPrompt,
+		timeout:   180 * time.Second,
+		onSuccess: func(text string, runID int64) (string, string) {
+			if err := h.S.UpdateProjectDoc(proj.ID, text); err != nil {
+				log.Printf("updateProjectDoc(%d): %v", proj.ID, err)
+			}
+			return string(web.RenderMarkdown(text)), ""
+		},
 	})
-	if err != nil {
-		_ = h.S.FinishRun(runID, "failed", "", err.Error(), 0, 0)
-		writeSSE(w, flusher, "error", "draft failed: "+err.Error())
-		return
-	}
-	_ = h.S.FinishRun(runID, "ok", res.Text, "", res.TokensIn, res.TokensOut)
-	_ = h.S.UpdateProjectDoc(proj.ID, res.Text)
-	writeSSE(w, flusher, "end", string(web.RenderMarkdown(res.Text)))
 }
 
-// writeSSE writes one SSE event. Lines in data are split per spec.
+// writeSSE writes one SSE event. Each line of data becomes its own
+// data: line per spec. \r characters are stripped because the SSE wire
+// format also recognises CR as a line terminator and some clients
+// (notably curl with --max-time) get confused by CR-LF inputs.
 func writeSSE(w http.ResponseWriter, f http.Flusher, event, data string) {
 	fmt.Fprintf(w, "event: %s\n", event)
 	for _, line := range strings.Split(data, "\n") {
+		line = strings.TrimRight(line, "\r")
 		fmt.Fprintf(w, "data: %s\n", line)
 	}
 	fmt.Fprint(w, "\n")
 	f.Flush()
+}
+
+// openSSE writes the SSE response headers and returns the Flusher.
+// Returns nil if the response writer doesn't support flushing (caller
+// has already sent http.Error in that case).
+func openSSE(w http.ResponseWriter) http.Flusher {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming unsupported", 500)
+		return nil
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("X-Accel-Buffering", "no")
+	w.WriteHeader(200)
+	return flusher
+}
+
+// sseEvent is an SSE event waiting to be emitted before the LLM stream.
+type sseEvent struct{ Event, Data string }
+
+// streamSpec drives the streamSSE helper.
+type streamSpec struct {
+	trigger   string
+	agentID   sql.NullInt64
+	projectID sql.NullInt64
+	modelKey  string
+	system    string
+	user      string
+	timeout   time.Duration
+	preEvents []sseEvent
+	// onSuccess runs after FinishRun and may persist artifacts. It returns
+	// the payload for the "end" event, or a non-empty errMsg to emit an
+	// "error" event instead (e.g. parse failure on the LLM output).
+	onSuccess func(text string, runID int64) (endPayload string, errMsg string)
+}
+
+// streamSSE handles the common shape of every LLM-streaming endpoint:
+// headers, optional pre-events, run row, deltas, finish, end. Errors
+// from StartRun are surfaced to the client and abort the call (previously
+// they were silently swallowed).
+func (h *Handler) streamSSE(w http.ResponseWriter, r *http.Request, spec streamSpec) {
+	flusher := openSSE(w)
+	if flusher == nil {
+		return
+	}
+	for _, e := range spec.preEvents {
+		writeSSE(w, flusher, e.Event, e.Data)
+	}
+
+	timeout := spec.timeout
+	if timeout == 0 {
+		timeout = 180 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), timeout)
+	defer cancel()
+
+	runID, err := h.S.StartRun(spec.agentID, spec.projectID, spec.trigger, spec.user)
+	if err != nil {
+		log.Printf("startRun(%s): %v", spec.trigger, err)
+		writeSSE(w, flusher, "error", spec.trigger+": failed to record run: "+err.Error())
+		return
+	}
+
+	res, err := h.LLM.CompleteStream(ctx, spec.modelKey, spec.system, spec.user, func(chunk string) {
+		writeSSE(w, flusher, "delta", chunk)
+	})
+	if err != nil {
+		if fErr := h.S.FinishRun(runID, "failed", "", err.Error(), 0, 0); fErr != nil {
+			log.Printf("finishRun(%d): %v", runID, fErr)
+		}
+		writeSSE(w, flusher, "error", spec.trigger+" failed: "+err.Error())
+		return
+	}
+	if fErr := h.S.FinishRun(runID, "ok", res.Text, "", res.TokensIn, res.TokensOut); fErr != nil {
+		log.Printf("finishRun(%d): %v", runID, fErr)
+	}
+
+	if spec.onSuccess != nil {
+		endPayload, errMsg := spec.onSuccess(res.Text, runID)
+		if errMsg != "" {
+			writeSSE(w, flusher, "error", errMsg)
+			return
+		}
+		writeSSE(w, flusher, "end", endPayload)
+	} else {
+		writeSSE(w, flusher, "end", string(web.RenderMarkdown(res.Text)))
+	}
 }
 
 // ---- agents ----
@@ -863,6 +904,9 @@ func (h *Handler) agents(w http.ResponseWriter, r *http.Request) {
 		if _, err := h.S.CreateAgent(a); err != nil {
 			http.Error(w, err.Error(), 500)
 			return
+		}
+		if h.OnAgentChanged != nil {
+			h.OnAgentChanged()
 		}
 		agents, _ := h.S.ListAgents()
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -890,7 +934,7 @@ func (h *Handler) agentActions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
+		ctx, cancel := context.WithTimeout(h.RootCtx, 180*time.Second)
 		defer cancel()
 
 		var projID sql.NullInt64
@@ -991,19 +1035,6 @@ func (h *Handler) boardCluster(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		http.Error(w, "streaming unsupported", 500)
-		return
-	}
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("X-Accel-Buffering", "no")
-	w.WriteHeader(200)
-
-	ctx, cancel := context.WithTimeout(r.Context(), 240*time.Second)
-	defer cancel()
-
 	var b strings.Builder
 	b.WriteString("Ideas:\n")
 	for _, i := range ideas {
@@ -1011,26 +1042,23 @@ func (h *Handler) boardCluster(w http.ResponseWriter, r *http.Request) {
 	}
 	userPrompt := b.String()
 
-	runID, _ := h.S.StartRun(sql.NullInt64{}, sql.NullInt64{}, "cluster", userPrompt)
-	res, err := h.LLM.CompleteStream(ctx, llm.ModelProKey, systemClustererPrompt, userPrompt,
-		func(chunk string) { writeSSE(w, flusher, "delta", chunk) })
-	if err != nil {
-		_ = h.S.FinishRun(runID, "failed", "", err.Error(), 0, 0)
-		writeSSE(w, flusher, "error", "cluster failed: "+err.Error())
-		return
-	}
-	_ = h.S.FinishRun(runID, "ok", res.Text, "", res.TokensIn, res.TokensOut)
-
-	parsed, parseErr := parseClustererJSON(res.Text)
-	if parseErr != nil {
-		writeSSE(w, flusher, "error", "parse failed: "+parseErr.Error())
-		return
-	}
-	if err := h.S.ReplaceClusterData(parsed.clusters, parsed.links); err != nil {
-		writeSSE(w, flusher, "error", "store failed: "+err.Error())
-		return
-	}
-	writeSSE(w, flusher, "end", "ok")
+	h.streamSSE(w, r, streamSpec{
+		trigger:  "cluster",
+		modelKey: llm.ModelProKey,
+		system:   systemClustererPrompt,
+		user:     userPrompt,
+		timeout:  240 * time.Second,
+		onSuccess: func(text string, runID int64) (string, string) {
+			parsed, err := parseClustererJSON(text)
+			if err != nil {
+				return "", "parse failed: " + err.Error()
+			}
+			if err := h.S.ReplaceClusterData(parsed.clusters, parsed.links); err != nil {
+				return "", "store failed: " + err.Error()
+			}
+			return "ok", ""
+		},
+	})
 }
 
 func (h *Handler) boardSynthesize(w http.ResponseWriter, r *http.Request) {
@@ -1055,43 +1083,33 @@ func (h *Handler) boardSynthesize(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		http.Error(w, "streaming unsupported", 500)
-		return
-	}
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("X-Accel-Buffering", "no")
-	w.WriteHeader(200)
-
 	pid, err := h.S.CreateProject(store.Project{
 		Title:   a.Title + " × " + b.Title,
 		Summary: "synthesis of ideas #" + strconv.FormatInt(a.ID, 10) + " and #" + strconv.FormatInt(b.ID, 10),
 	})
 	if err != nil {
-		writeSSE(w, flusher, "error", "create project: "+err.Error())
+		http.Error(w, "create project: "+err.Error(), 500)
 		return
 	}
-	writeSSE(w, flusher, "project", strconv.FormatInt(pid, 10))
-
-	ctx, cancel := context.WithTimeout(r.Context(), 180*time.Second)
-	defer cancel()
 	userPrompt := fmt.Sprintf(
 		"Two ideas have been selected for synthesis. Produce a single design doc that combines them — the goal is to find the unified project that subsumes both, not to merge them mechanically.\n\nIdea A (#%d): %s\n%s\n\nIdea B (#%d): %s\n%s\n\nThis is a fresh project with no chosen tech stack yet. In the Open questions section, list the load-bearing stack choices the author will need to make (runtime/framework/storage/deploy) — frame them as concrete trade-offs given what the ideas imply, not as a generic checklist.",
 		a.ID, a.Title, a.Body, b.ID, b.Title, b.Body,
 	)
-	runID, _ := h.S.StartRun(sql.NullInt64{}, sql.NullInt64{Int64: pid, Valid: true}, "synthesize", userPrompt)
-	res, err := h.LLM.CompleteStream(ctx, llm.ModelProKey, systemDesignDocPrompt, userPrompt,
-		func(chunk string) { writeSSE(w, flusher, "delta", chunk) })
-	if err != nil {
-		_ = h.S.FinishRun(runID, "failed", "", err.Error(), 0, 0)
-		writeSSE(w, flusher, "error", "synth failed: "+err.Error())
-		return
-	}
-	_ = h.S.FinishRun(runID, "ok", res.Text, "", res.TokensIn, res.TokensOut)
-	_ = h.S.UpdateProjectDoc(pid, res.Text)
-	writeSSE(w, flusher, "end", string(web.RenderMarkdown(res.Text)))
+	h.streamSSE(w, r, streamSpec{
+		trigger:   "synthesize",
+		projectID: sql.NullInt64{Int64: pid, Valid: true},
+		modelKey:  llm.ModelProKey,
+		system:    systemDesignDocPrompt,
+		user:      userPrompt,
+		timeout:   180 * time.Second,
+		preEvents: []sseEvent{{Event: "project", Data: strconv.FormatInt(pid, 10)}},
+		onSuccess: func(text string, runID int64) (string, string) {
+			if err := h.S.UpdateProjectDoc(pid, text); err != nil {
+				log.Printf("updateProjectDoc(%d): %v", pid, err)
+			}
+			return string(web.RenderMarkdown(text)), ""
+		},
+	})
 }
 
 type clustererResult struct {

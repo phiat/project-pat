@@ -16,21 +16,35 @@ import (
 	"projectpat/internal/store"
 )
 
+type scheduled struct {
+	entryID cron.EntryID
+	cron    string
+}
+
 type Scheduler struct {
 	store *store.Store
 	llm   *llm.Client
 	cron  *cron.Cron
 
-	mu  sync.Mutex
-	ids map[int64]cron.EntryID
+	mu     sync.Mutex
+	ids    map[int64]scheduled
+	notify chan struct{}
+	done   chan struct{}
+
+	// RootCtx is the parent for cron-fired agent goroutines so they stop
+	// when the server shuts down.
+	RootCtx context.Context
 }
 
 func New(s *store.Store, l *llm.Client) *Scheduler {
 	return &Scheduler{
-		store: s,
-		llm:   l,
-		cron:  cron.New(),
-		ids:   make(map[int64]cron.EntryID),
+		store:   s,
+		llm:     l,
+		cron:    cron.New(),
+		ids:     make(map[int64]scheduled),
+		notify:  make(chan struct{}, 1),
+		done:    make(chan struct{}),
+		RootCtx: context.Background(),
 	}
 }
 
@@ -44,8 +58,18 @@ func (sc *Scheduler) Start() error {
 }
 
 func (sc *Scheduler) Stop() {
+	close(sc.done)
 	ctx := sc.cron.Stop()
 	<-ctx.Done()
+}
+
+// Reload pings the scheduler to re-read agents from the DB now. Non-blocking;
+// if a reload is already queued, this is a no-op.
+func (sc *Scheduler) Reload() {
+	select {
+	case sc.notify <- struct{}{}:
+	default:
+	}
 }
 
 func (sc *Scheduler) syncFromDB() error {
@@ -56,24 +80,29 @@ func (sc *Scheduler) syncFromDB() error {
 	sc.mu.Lock()
 	defer sc.mu.Unlock()
 
-	// remove ids no longer present or disabled
-	wanted := make(map[int64]bool)
+	// build the want-set
+	wanted := make(map[int64]store.Agent, len(agents))
 	for _, a := range agents {
 		if a.Enabled && strings.TrimSpace(a.Cron) != "" {
-			wanted[a.ID] = true
+			wanted[a.ID] = a
 		}
 	}
-	for id, entry := range sc.ids {
-		if !wanted[id] {
-			sc.cron.Remove(entry)
+	// drop entries no longer present, disabled, or whose cron changed
+	for id, sched := range sc.ids {
+		a, keep := wanted[id]
+		if !keep || a.Cron != sched.cron {
+			sc.cron.Remove(sched.entryID)
 			delete(sc.ids, id)
+			if !keep {
+				log.Printf("scheduler: unscheduled agent #%d", id)
+			} else {
+				log.Printf("scheduler: rescheduling agent #%d (cron changed)", id)
+			}
 		}
 	}
-	for _, a := range agents {
-		if !wanted[a.ID] {
-			continue
-		}
-		if _, ok := sc.ids[a.ID]; ok {
+	// add any newly-wanted entries
+	for id, a := range wanted {
+		if _, ok := sc.ids[id]; ok {
 			continue
 		}
 		agentCopy := a
@@ -82,16 +111,24 @@ func (sc *Scheduler) syncFromDB() error {
 			log.Printf("scheduler: invalid cron %q for agent %s: %v", a.Cron, a.Name, err)
 			continue
 		}
-		sc.ids[a.ID] = entryID
+		sc.ids[id] = scheduled{entryID: entryID, cron: a.Cron}
 		log.Printf("scheduler: scheduled agent %s (#%d) on %q", a.Name, a.ID, a.Cron)
 	}
 	return nil
 }
 
+// reloadLoop reacts to explicit Reload() pings (e.g. after agent CRUD)
+// and to a slower backstop ticker.
 func (sc *Scheduler) reloadLoop() {
 	t := time.NewTicker(30 * time.Second)
 	defer t.Stop()
-	for range t.C {
+	for {
+		select {
+		case <-sc.done:
+			return
+		case <-sc.notify:
+		case <-t.C:
+		}
 		if err := sc.syncFromDB(); err != nil {
 			log.Printf("scheduler reload: %v", err)
 		}
@@ -99,7 +136,7 @@ func (sc *Scheduler) reloadLoop() {
 }
 
 func (sc *Scheduler) runAgent(a store.Agent) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	ctx, cancel := context.WithTimeout(sc.RootCtx, 5*time.Minute)
 	defer cancel()
 
 	var projID sql.NullInt64

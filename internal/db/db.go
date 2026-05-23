@@ -8,11 +8,19 @@ import (
 )
 
 func Open(path string) (*sql.DB, error) {
-	dsn := fmt.Sprintf("file:%s?_pragma=journal_mode(WAL)&_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)", path)
+	dsn := fmt.Sprintf(
+		"file:%s?_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)&_pragma=cache_size(-20000)&_txlock=immediate",
+		path,
+	)
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, err
 	}
+	// modernc.org/sqlite supports concurrent reads; serialise writes via a
+	// single writer connection at the driver level by capping max open
+	// connections — avoids SQLITE_BUSY churn under scheduler+HTTP load.
+	db.SetMaxOpenConns(8)
+	db.SetMaxIdleConns(4)
 	if err := db.Ping(); err != nil {
 		db.Close()
 		return nil, err

@@ -55,13 +55,20 @@ func main() {
 	if err != nil {
 		log.Fatalf("templates: %v", err)
 	}
+	rootCtx, rootCancel := context.WithCancel(context.Background())
+	defer rootCancel()
+
+	sc := scheduler.New(st, client)
+	sc.RootCtx = rootCtx
+
 	h := handlers.New(st, client, renderer)
+	h.RootCtx = rootCtx
+	h.OnAgentChanged = sc.Reload
 
 	mux := http.NewServeMux()
 	h.Mount(mux)
 	mux.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.Dir(cfg.StaticDir))))
 
-	sc := scheduler.New(st, client)
 	if err := sc.Start(); err != nil {
 		log.Fatalf("scheduler: %v", err)
 	}
@@ -92,6 +99,8 @@ func main() {
 	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
 	<-sig
 	log.Printf("shutdown initiated")
+	// signal in-flight agent goroutines to abort, then close http
+	rootCancel()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	_ = srv.Shutdown(ctx)

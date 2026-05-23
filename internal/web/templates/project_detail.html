@@ -28,7 +28,7 @@
       <span id="doc-spin" class="muted" hidden>streaming…</span>
     </form>
   </header>
-  <article id="doc" class="doc">
+  <article id="doc" class="doc" aria-live="polite">
     {{if .DesignDoc}}{{markdown .DesignDoc}}{{else}}<p class="muted">no doc yet. click draft to generate.</p>{{end}}
   </article>
   <textarea hidden class="copy-source" id="copy-src-doc" readonly>{{.DesignDoc}}</textarea>
@@ -45,7 +45,7 @@
       <span id="crit-spin" class="muted" hidden>streaming…</span>
     </div>
   </header>
-  <article id="crit" class="doc">
+  <article id="crit" class="doc" aria-live="polite">
     {{with $.Critique}}{{markdown .Body}}{{else}}<p class="muted">no critique yet. request one — a pro-tier critic will score the doc and suggest edits.</p>{{end}}
   </article>
   <textarea hidden class="copy-source" id="copy-src-crit" readonly>{{with $.Critique}}{{.Body}}{{end}}</textarea>
@@ -61,7 +61,7 @@
       <span id="brief-spin" class="muted" hidden>streaming…</span>
     </form>
   </header>
-  <article id="brief-body" class="doc">
+  <article id="brief-body" class="doc" aria-live="polite">
     {{with $.Brief}}{{markdown .Body}}{{else}}<p class="muted">no brief yet. request one — pro will outline claims, counter-claims, open questions, and a reading list.</p>{{end}}
   </article>
   <textarea hidden class="copy-source" id="copy-src-brief-body" readonly>{{with $.Brief}}{{.Body}}{{end}}</textarea>
@@ -92,50 +92,26 @@
   const out  = document.getElementById("brief-body");
   const spin = document.getElementById("brief-spin");
   const projectId = form.dataset.projectId;
+  let streaming = false;
   form.addEventListener("submit", async (ev) => {
     ev.preventDefault();
-    spin.hidden = false;
-    const res = await fetch(`/projects/${projectId}/brief`, { method: "POST", body: new FormData(form) });
-    if (!res.ok || !res.body) {
-      out.innerHTML = `<p class="err">brief failed (${res.status})</p>`;
-      spin.hidden = true; return;
-    }
-    out.innerHTML = `<pre class="stream-pre"></pre>`;
+    if (streaming) return;
+    streaming = true; spin.hidden = false;
+    out.innerHTML = `<pre class="stream-pre" aria-live="polite"></pre>`;
     const pre = out.querySelector(".stream-pre");
-    const reader = res.body.getReader();
-    const dec = new TextDecoder();
-    let buffer = "", final = null;
-    while (true) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      buffer += dec.decode(value, { stream: true });
-      let idx;
-      while ((idx = buffer.indexOf("\n\n")) !== -1) {
-        const block = buffer.slice(0, idx); buffer = buffer.slice(idx + 2);
-        const evt = parseSSE(block);
-        if (evt.event === "delta")      pre.textContent += evt.data;
-        else if (evt.event === "end")   final = evt.data;
-        else if (evt.event === "error") { out.innerHTML = `<p class="err">${evt.data}</p>`; spin.hidden = true; return; }
-      }
-    }
-    if (window.setCopySource) window.setCopySource("brief-body", pre.textContent);
-    if (final) {
-      out.innerHTML = final;
-      // reading list lives in a sibling container — easiest is full page refresh
+    let final = null;
+    const result = await window.streamSSE(`/projects/${projectId}/brief`, new FormData(form), {
+      onDelta: (text) => { pre.textContent += text; },
+      onEnd:   (html) => { final = html; },
+      onError: (msg)  => { out.innerHTML = `<p class="err">${window.escapeHTML(msg)}</p>`; },
+    });
+    if (result.ok && final) {
+      window.setCopySource("brief-body", result.accumulated);
+      // reading list lives in a sibling container — full reload to pick it up
       window.location.reload();
     }
-    spin.hidden = true;
+    spin.hidden = true; streaming = false;
   });
-  function parseSSE(block) {
-    const out = { event: "delta", data: "" };
-    const lines = [];
-    for (const line of block.split("\n")) {
-      if (line.startsWith("event:")) out.event = line.slice(6).trim();
-      else if (line.startsWith("data:")) lines.push(line.slice(5).replace(/^ /, ""));
-    }
-    out.data = lines.join("\n");
-    return out;
-  }
 })();
 </script>
 
@@ -174,22 +150,7 @@
     <form class="form form-grid" hx-post="/projects/{{.ID}}/standing-orders" hx-swap="none">
       <input type="text" name="name" placeholder="name (e.g. 'weekly prior-art scan')" required>
       <input type="text" name="purpose" placeholder="purpose">
-      <div class="cron-control">
-        <select class="cron-preset" data-target="so-cron-{{.ID}}">
-          <option value="">— preset —</option>
-          <option value="@every 5m">every 5m</option>
-          <option value="@every 15m">every 15m</option>
-          <option value="@every 30m">every 30m</option>
-          <option value="@every 1h">every 1h</option>
-          <option value="@every 3h">every 3h</option>
-          <option value="@every 6h">every 6h</option>
-          <option value="@every 12h">every 12h</option>
-          <option value="0 8 * * *">daily 08:00</option>
-          <option value="0 8 * * 1">weekly Mon 08:00</option>
-          <option value="@weekly">@weekly</option>
-        </select>
-        <input id="so-cron-{{.ID}}" type="text" name="cron" placeholder="cron or '@every 1h'">
-      </div>
+      {{template "cron_picker" (dict "TargetID" (printf "so-cron-%d" .ID))}}
       <select name="model">
         <option value="flash">flash</option>
         <option value="pro">pro</option>
@@ -276,47 +237,19 @@
     const out  = document.getElementById(outId);
     const spin = document.getElementById(spinId);
     spin.hidden = false;
-    const res = await fetch(url, { method: "POST", body });
-    if (!res.ok || !res.body) {
-      out.innerHTML = `<p class="err">request failed (${res.status})</p>`;
-      spin.hidden = true; return;
-    }
-    out.innerHTML = `<pre class="stream-pre"></pre>`;
+    out.innerHTML = `<pre class="stream-pre" aria-live="polite"></pre>`;
     const pre = out.querySelector(".stream-pre");
-    const reader = res.body.getReader();
-    const dec = new TextDecoder();
-    let buffer = "", final = null;
-    while (true) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      buffer += dec.decode(value, { stream: true });
-      let idx;
-      while ((idx = buffer.indexOf("\n\n")) !== -1) {
-        const block = buffer.slice(0, idx); buffer = buffer.slice(idx + 2);
-        const evt = parseSSE(block);
-        if (evt.event === "delta")      pre.textContent += evt.data;
-        else if (evt.event === "end")   final = evt.data;
-        else if (evt.event === "error") { out.innerHTML = `<p class="err">${escapeHTML(evt.data)}</p>`; spin.hidden = true; return; }
-      }
-    }
-    // stash the accumulated markdown for copy-to-clipboard before the
-    // rendered-HTML swap clobbers the <pre>.
-    if (window.setCopySource) window.setCopySource(outId, pre.textContent);
+    let final = null, failed = false;
+    const result = await window.streamSSE(url, body, {
+      onDelta: (text) => { pre.textContent += text; },
+      onEnd:   (html) => { final = html; },
+      onError: (msg)  => { out.innerHTML = `<p class="err">${window.escapeHTML(msg)}</p>`; failed = true; },
+    });
+    if (!failed && result.ok) window.setCopySource(outId, result.accumulated);
     if (final) out.innerHTML = final;
     spin.hidden = true;
-    if (onDone) onDone();
+    if (!failed && onDone) onDone();
   }
-  function parseSSE(block) {
-    const out = { event: "delta", data: "" };
-    const lines = [];
-    for (const line of block.split("\n")) {
-      if (line.startsWith("event:")) out.event = line.slice(6).trim();
-      else if (line.startsWith("data:")) lines.push(line.slice(5).replace(/^ /, ""));
-    }
-    out.data = lines.join("\n");
-    return out;
-  }
-  function escapeHTML(s) { return s.replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c])); }
 })();
 </script>
 {{end}}

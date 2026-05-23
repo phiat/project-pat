@@ -7,12 +7,25 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 )
 
 const anthropicVersion = "2023-06-01"
+
+var (
+	anthropicUnknownEvents   sync.Map // event-type -> struct{} (already-logged set)
+)
+
+func warnOnceAnthropicEvent(typ string) {
+	if _, loaded := anthropicUnknownEvents.LoadOrStore(typ, struct{}{}); loaded {
+		return
+	}
+	log.Printf("anthropic: unknown SSE event type %q (driver may need updating)", typ)
+}
 
 // anthropicDriver speaks the Anthropic /v1/messages protocol.
 type anthropicDriver struct {
@@ -261,6 +274,13 @@ func (d *anthropicDriver) CompleteStream(ctx context.Context, modelKey, system, 
 			if err := json.Unmarshal([]byte(payload), &md); err == nil && md.Usage.OutputTokens > 0 {
 				tokOut = md.Usage.OutputTokens
 			}
+		case "content_block_start", "content_block_stop", "message_stop", "ping":
+			// expected but uninteresting events; ignore quietly
+		default:
+			// Log once per process per unknown type so an API change
+			// renaming an event surfaces in logs rather than silently
+			// zeroing output.
+			warnOnceAnthropicEvent(head.Type)
 		}
 	}
 	if err := scanner.Err(); err != nil {

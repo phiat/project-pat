@@ -48,50 +48,24 @@
     ev.preventDefault();
     if (streaming) return;
     streaming = true; spin.hidden = false;
-    const res = await fetch("/ideas/quick", { method: "POST", body: new FormData(form) });
-    if (!res.ok || !res.body) {
-      out.innerHTML = `<p class="err">draft failed (${res.status})</p>`;
-      streaming = false; spin.hidden = true; return;
-    }
-    out.innerHTML = `<div class="panel" style="margin-top:14px"><div class="panel-head"><div id="quick-meta" class="muted">seed</div><button class="copy-btn" type="button" aria-label="copy" data-copy-source-id="copy-src-quick"><svg class="copy-icon-default" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg><svg class="copy-icon-done" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg></button></div><pre id="quick-stream"></pre><textarea hidden class="copy-source" id="copy-src-quick" readonly></textarea></div>`;
+
+    out.innerHTML = `<div class="panel" style="margin-top:14px"><div class="panel-head"><div id="quick-meta" class="muted">seed</div><button class="copy-btn" type="button" aria-label="copy" data-copy-source-id="copy-src-quick"><svg class="copy-icon-default" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg><svg class="copy-icon-done" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg></button></div><pre id="quick-stream" aria-live="polite"></pre><textarea hidden class="copy-source" id="copy-src-quick" readonly></textarea></div>`;
     const meta = out.querySelector("#quick-meta");
     const pre  = out.querySelector("#quick-stream");
     const src  = out.querySelector("#copy-src-quick");
-    const reader = res.body.getReader();
-    const dec = new TextDecoder();
-    let buffer = "";
+
     let final = null;
-    while (true) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      buffer += dec.decode(value, { stream: true });
-      let idx;
-      while ((idx = buffer.indexOf("\n\n")) !== -1) {
-        const block = buffer.slice(0, idx); buffer = buffer.slice(idx + 2);
-        const evt = parseSSE(block);
-        if (evt.event === "delta")      pre.textContent += evt.data;
-        else if (evt.event === "meta")  meta.textContent = "seed for " + evt.data;
-        else if (evt.event === "end")   final = evt.data;
-        else if (evt.event === "error") { out.innerHTML = `<p class="err">${evt.data}</p>`; streaming = false; spin.hidden = true; return; }
-      }
-    }
-    if (src) src.value = pre.textContent;
-    if (final) {
-      pre.outerHTML = `<div class="doc">${final}</div>`;
-    }
-    form.reset();
+    const result = await window.streamSSE("/ideas/quick", new FormData(form), {
+      onDelta: (text) => { pre.textContent += text; },
+      onMeta:  (s)    => { meta.textContent = "seed for " + s; },
+      onEnd:   (html) => { final = html; },
+      onError: (msg)  => { out.innerHTML = `<p class="err">${window.escapeHTML(msg)}</p>`; },
+    });
+    if (src && result.ok) src.value = result.accumulated;
+    if (final) pre.outerHTML = `<div class="doc">${final}</div>`;
+    if (result.ok) form.reset();
     streaming = false; spin.hidden = true;
   });
-  function parseSSE(block) {
-    const out = { event: "delta", data: "" };
-    const lines = [];
-    for (const line of block.split("\n")) {
-      if (line.startsWith("event:")) out.event = line.slice(6).trim();
-      else if (line.startsWith("data:")) lines.push(line.slice(5).replace(/^ /, ""));
-    }
-    out.data = lines.join("\n");
-    return out;
-  }
 })();
 </script>
 

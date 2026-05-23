@@ -30,21 +30,26 @@ document.getElementById("synth-btn").addEventListener("click", runSynth);
 canvas.addEventListener("pointermove", onMove);
 canvas.addEventListener("pointerdown", onDown);
 canvas.addEventListener("pointerup",   onUp);
-canvas.addEventListener("pointerleave", () => { hoverId = null; });
-canvas.addEventListener("dblclick", onDblClick);
+canvas.addEventListener("pointerleave", () => { if (hoverId !== null) { hoverId = null; wakeAnim(); } });
 
 function resize() {
-  const w = canvas.clientWidth, h = canvas.clientHeight;
+  const w = Math.max(canvas.clientWidth, 1), h = Math.max(canvas.clientHeight, 1);
   canvas.width  = Math.floor(w * dpr);
   canvas.height = Math.floor(h * dpr);
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  needRender = true;
+  if (!animRAF) animRAF = requestAnimationFrame(tick);
+}
+if (typeof ResizeObserver !== "undefined") {
+  const ro = new ResizeObserver(() => resize());
+  ro.observe(canvas);
 }
 
 async function loadAndStart() {
   const res = await fetch("/board/data");
   const data = await res.json();
   buildGraph(data);
-  requestAnimationFrame(tick);
+  wakeAnim();
 }
 
 function buildGraph(data) {
@@ -80,6 +85,7 @@ function buildGraph(data) {
   nodes.forEach(n => { n.r = 7 + Math.min(8, (deg.get(n.id) || 0) * 4); });
 
   emptyEl.hidden = nodes.length > 0;
+  needRender = true;
 }
 
 // physics
@@ -183,10 +189,29 @@ function draw() {
   });
 }
 
+let animRAF = 0;
+let needRender = true;
+
 function tick() {
   step();
   draw();
-  requestAnimationFrame(tick);
+  // schedule next frame only while the graph is still moving or a
+  // re-render was explicitly requested (resize, hover, drag, rebuild).
+  if (kineticEnergy() > 0.02 || needRender) {
+    needRender = false;
+    animRAF = requestAnimationFrame(tick);
+  } else {
+    animRAF = 0;
+  }
+}
+function kineticEnergy() {
+  let e = 0;
+  for (const n of nodes) e += n.vx * n.vx + n.vy * n.vy;
+  return e;
+}
+function wakeAnim() {
+  needRender = true;
+  if (!animRAF) animRAF = requestAnimationFrame(tick);
 }
 
 // interaction
@@ -206,35 +231,32 @@ function onMove(ev) {
   const { x, y } = pointerXY(ev);
   if (drag) {
     const n = nodeById.get(drag.id);
-    if (n) { n.x = x; n.y = y; }
+    if (n) { n.x = x; n.y = y; wakeAnim(); }
   } else {
     const n = pickNode(x, y);
-    hoverId = n ? n.id : null;
+    const newHover = n ? n.id : null;
+    if (newHover !== hoverId) { hoverId = newHover; wakeAnim(); }
     canvas.style.cursor = n ? "pointer" : "default";
   }
 }
 function onDown(ev) {
   const { x, y } = pointerXY(ev);
   const n = pickNode(x, y);
-  if (n) { drag = { id: n.id }; canvas.setPointerCapture(ev.pointerId); }
-}
-function onUp(ev) {
-  if (drag) {
-    const moved = pointerXY(ev);
-    const n = nodeById.get(drag.id);
-    drag = null;
-    canvas.releasePointerCapture(ev.pointerId);
-    // distinguish click from drag (small movement)
-    if (n) {
-      const dx = moved.x - n.x, dy = moved.y - n.y;
-      if (Math.abs(dx) < 3 && Math.abs(dy) < 3) toggleSelect(n);
-    }
+  if (n) {
+    // remember pointerdown coords so onUp can distinguish click from drag
+    drag = { id: n.id, downX: x, downY: y };
+    canvas.setPointerCapture(ev.pointerId);
   }
 }
-function onDblClick(ev) {
-  const { x, y } = pointerXY(ev);
-  const n = pickNode(x, y);
-  if (n) window.open(`/ideas`, "_self");  // ideas list — no per-idea route yet
+function onUp(ev) {
+  if (!drag) return;
+  const moved = pointerXY(ev);
+  const n = nodeById.get(drag.id);
+  const dx = moved.x - drag.downX, dy = moved.y - drag.downY;
+  const isClick = Math.abs(dx) < 4 && Math.abs(dy) < 4;
+  drag = null;
+  canvas.releasePointerCapture(ev.pointerId);
+  if (n && isClick) toggleSelect(n);
 }
 
 function toggleSelect(n) {
@@ -250,6 +272,7 @@ function toggleSelect(n) {
     selectedIds = selectedIds.filter(id => id !== n.id);
   }
   document.getElementById("synth-btn").disabled = selectedIds.length !== 2;
+  wakeAnim();
 }
 
 async function runCluster() {
@@ -257,39 +280,17 @@ async function runCluster() {
   const notes = document.getElementById("cluster-notes");
   spin.hidden = false;
   notes.textContent = "";
-  const res = await fetch("/board/cluster", { method: "POST" });
-  if (!res.ok || !res.body) {
-    notes.innerHTML = `<p class="err">cluster failed (${res.status})</p>`;
-    spin.hidden = true; return;
-  }
-  const reader = res.body.getReader();
-  const dec = new TextDecoder();
-  let buffer = "", text = "";
-  let done = false;
-  while (!done) {
-    const { value, done: d } = await reader.read();
-    if (d) break;
-    buffer += dec.decode(value, { stream: true });
-    let idx;
-    while ((idx = buffer.indexOf("\n\n")) !== -1) {
-      const block = buffer.slice(0, idx); buffer = buffer.slice(idx + 2);
-      const evt = parseSSE(block);
-      if (evt.event === "delta") {
-        text += evt.data;
-        notes.textContent = text;
-      } else if (evt.event === "end") {
-        done = true;
-      } else if (evt.event === "error") {
-        notes.innerHTML = `<p class="err">${evt.data}</p>`;
-        spin.hidden = true;
-        return;
-      }
-    }
-  }
+  let failed = false;
+  await window.streamSSE("/board/cluster", null, {
+    onDelta: (t) => { notes.textContent += t; },
+    onError: (msg) => { notes.innerHTML = `<p class="err">${window.escapeHTML(msg)}</p>`; failed = true; },
+  });
   spin.hidden = true;
-  // reload graph data
+  if (failed) return;
+  // refresh graph from server
   const data = await (await fetch("/board/data")).json();
   buildGraph(data);
+  wakeAnim();
 }
 
 async function runSynth() {
@@ -301,43 +302,15 @@ async function runSynth() {
   notes.innerHTML = `<p class="muted">synthesizing #${a} × #${b}…</p>`;
   const fd = new FormData();
   fd.set("a", a); fd.set("b", b);
-  const res = await fetch("/board/synthesize", { method: "POST", body: fd });
-  if (!res.ok || !res.body) {
-    notes.innerHTML = `<p class="err">synth failed (${res.status})</p>`;
-    spin.hidden = true; return;
-  }
-  const reader = res.body.getReader();
-  const dec = new TextDecoder();
-  let buffer = "", pid = null;
-  while (true) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    buffer += dec.decode(value, { stream: true });
-    let idx;
-    while ((idx = buffer.indexOf("\n\n")) !== -1) {
-      const block = buffer.slice(0, idx); buffer = buffer.slice(idx + 2);
-      const evt = parseSSE(block);
-      if (evt.event === "project") pid = evt.data;
-      else if (evt.event === "end") {
-        spin.hidden = true;
-        if (pid) window.location.href = `/projects/${pid}`;
-        return;
-      } else if (evt.event === "error") {
-        notes.innerHTML = `<p class="err">${evt.data}</p>`;
-        spin.hidden = true; return;
-      }
-    }
-  }
+  let pid = null, failed = false;
+  await window.streamSSE("/board/synthesize", fd, {
+    onProject: (id) => { pid = id; },
+    onError:   (msg) => { notes.innerHTML = `<p class="err">${window.escapeHTML(msg)}</p>`; failed = true; },
+    onEnd:     () => {
+      if (pid) window.location.href = `/projects/${pid}`;
+    },
+  });
+  spin.hidden = true;
 }
 
-function parseSSE(block) {
-  const out = { event: "delta", data: "" };
-  const lines = [];
-  for (const line of block.split("\n")) {
-    if (line.startsWith("event:")) out.event = line.slice(6).trim();
-    else if (line.startsWith("data:")) lines.push(line.slice(5).replace(/^ /, ""));
-  }
-  out.data = lines.join("\n");
-  return out;
-}
 function truncate(s, n) { return s.length > n ? s.slice(0, n) + "…" : s; }

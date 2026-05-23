@@ -35,6 +35,7 @@ func NewRenderer(dir string) (*Renderer, error) {
 			"markdown":   RenderMarkdown,
 			"compatible": stack.IsOptionCompatible,
 			"copyBtn":    copyButtonHTML,
+			"dict":       dictHelper,
 		},
 		pages:    make(map[string]*template.Template),
 		partials: make(map[string]*template.Template),
@@ -115,6 +116,23 @@ func (r *Renderer) RenderPartial(w io.Writer, partial string, data any) error {
 	}
 	_, err := w.Write(buf.Bytes())
 	return err
+}
+
+// dictHelper builds a map from alternating key/value args, for inline
+// template literals like: {{template "x" (dict "Key" "val" "N" 5)}}.
+func dictHelper(pairs ...any) (map[string]any, error) {
+	if len(pairs)%2 != 0 {
+		return nil, fmt.Errorf("dict: odd number of args")
+	}
+	m := make(map[string]any, len(pairs)/2)
+	for i := 0; i < len(pairs); i += 2 {
+		k, ok := pairs[i].(string)
+		if !ok {
+			return nil, fmt.Errorf("dict: key %d not a string", i)
+		}
+		m[k] = pairs[i+1]
+	}
+	return m, nil
 }
 
 // copyButtonHTML returns a small copy button bound to either a

@@ -49,11 +49,10 @@ function flash(btn, cls) {
 
 // Helper exposed for streaming handlers that accumulate markdown text and
 // want to persist it into the page's hidden source element before the
-// rendered HTML swap.
+// rendered HTML swap. Templates emit `<textarea id="copy-src-NAME">`.
 window.setCopySource = function(name, text) {
-  const el = document.querySelector(`[data-source-for="${CSS.escape(name)}"]`);
-  if (el) {
-    if (el.tagName === "TEXTAREA") el.value = text;
-    else el.textContent = text;
-  }
+  const el = document.getElementById("copy-src-" + name);
+  if (!el) return;
+  if (el.tagName === "TEXTAREA" || el.tagName === "INPUT") el.value = text;
+  else el.textContent = text;
 };

@@ -10,7 +10,9 @@
 { "imports": { "three": "https://unpkg.com/three@0.169.0/build/three.module.js" } }
 </script>
 <script type="module" src="/static/js/background.js" defer></script>
+<script src="/static/js/stream.js" defer></script>
 <script src="/static/js/copy.js" defer></script>
+<script src="/static/js/forms.js" defer></script>
 </head>
 <body>
 <canvas id="bg-canvas"></canvas>
@@ -30,9 +32,7 @@
     <a href="/inbox">inbox{{if .UnreadInbox}} <span class="nav-badge">{{.UnreadInbox}}</span>{{end}}</a>
     <a href="/runs">runs</a>
   </nav>
-  <div class="topbar-right">
-    <span class="kbd">⌘K</span>
-  </div>
+  <div class="topbar-right"></div>
 </header>
 
 <main class="page">
