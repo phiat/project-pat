@@ -34,6 +34,7 @@ func NewRenderer(dir string) (*Renderer, error) {
 			"safeHTML":   func(s string) template.HTML { return template.HTML(s) },
 			"markdown":   RenderMarkdown,
 			"compatible": stack.IsOptionCompatible,
+			"copyBtn":    copyButtonHTML,
 		},
 		pages:    make(map[string]*template.Template),
 		partials: make(map[string]*template.Template),
@@ -114,6 +115,32 @@ func (r *Renderer) RenderPartial(w io.Writer, partial string, data any) error {
 	}
 	_, err := w.Write(buf.Bytes())
 	return err
+}
+
+// copyButtonHTML returns a small copy button bound to either a
+// data-source element ("source:<name>") or a target by id ("target:<id>")
+// or a CSS selector. Use {{copyBtn "source:doc"}}, {{copyBtn "target:foo"}},
+// or {{copyBtn "sel:.something"}}.
+func copyButtonHTML(spec string) template.HTML {
+	kind, val := "source", spec
+	if i := strings.IndexByte(spec, ':'); i > 0 {
+		kind, val = spec[:i], spec[i+1:]
+	}
+	var attr string
+	switch kind {
+	case "source":
+		attr = `data-copy-source-id="copy-src-` + template.HTMLEscapeString(val) + `"`
+	case "target":
+		attr = `data-copy-target="` + template.HTMLEscapeString(val) + `"`
+	case "sel":
+		attr = `data-copy-source="` + template.HTMLEscapeString(val) + `"`
+	default:
+		attr = `data-copy-source-id="copy-src-` + template.HTMLEscapeString(spec) + `"`
+	}
+	return template.HTML(`<button class="copy-btn" type="button" aria-label="copy" title="copy" ` + attr + `>` +
+		`<svg class="copy-icon-default" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>` +
+		`<svg class="copy-icon-done" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>` +
+		`</button>`)
 }
 
 func truncate(s string, n int) string {

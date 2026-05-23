@@ -18,31 +18,37 @@
   <header class="panel-head">
     <h2>design doc</h2>
     <form id="draft-form" data-project-id="{{.ID}}">
+      <input type="text" name="focus" placeholder="optional: focus on…" class="focus-input">
       <select name="model">
         <option value="flash">flash · fast</option>
         <option value="pro">pro · deeper</option>
       </select>
       <button class="btn-primary" type="submit">draft / refine</button>
+      {{copyBtn "doc"}}
       <span id="doc-spin" class="muted" hidden>streaming…</span>
     </form>
   </header>
   <article id="doc" class="doc">
     {{if .DesignDoc}}{{markdown .DesignDoc}}{{else}}<p class="muted">no doc yet. click draft to generate.</p>{{end}}
   </article>
+  <textarea hidden class="copy-source" id="copy-src-doc" readonly>{{.DesignDoc}}</textarea>
 </section>
 
 <section class="panel" id="critique-panel" data-project-id="{{.ID}}">
   <header class="panel-head">
     <h2>critique</h2>
-    <div>
+    <div class="ctrl-row">
+      <input id="crit-focus" type="text" placeholder="optional: focus on…" class="focus-input">
       <button id="critique-btn" class="btn-ghost" type="button">request critique (pro)</button>
       <button id="apply-btn" class="btn-primary" type="button" {{if not $.Critique}}disabled{{end}}>apply critique →</button>
+      {{copyBtn "crit"}}
       <span id="crit-spin" class="muted" hidden>streaming…</span>
     </div>
   </header>
   <article id="crit" class="doc">
     {{with $.Critique}}{{markdown .Body}}{{else}}<p class="muted">no critique yet. request one — a pro-tier critic will score the doc and suggest edits.</p>{{end}}
   </article>
+  <textarea hidden class="copy-source" id="copy-src-crit" readonly>{{with $.Critique}}{{.Body}}{{end}}</textarea>
 </section>
 
 <section class="panel" id="brief-panel">
@@ -51,12 +57,14 @@
     <form id="brief-form" data-project-id="{{.ID}}">
       <input type="text" name="topic" placeholder="topic (defaults to project title)">
       <button class="btn-primary" type="submit">request brief (pro)</button>
+      {{copyBtn "brief-body"}}
       <span id="brief-spin" class="muted" hidden>streaming…</span>
     </form>
   </header>
   <article id="brief-body" class="doc">
     {{with $.Brief}}{{markdown .Body}}{{else}}<p class="muted">no brief yet. request one — pro will outline claims, counter-claims, open questions, and a reading list.</p>{{end}}
   </article>
+  <textarea hidden class="copy-source" id="copy-src-brief-body" readonly>{{with $.Brief}}{{.Body}}{{end}}</textarea>
   {{if $.BriefItems}}
   <div class="brief-list-wrap">
     <h3 class="brief-list-head">reading list</h3>
@@ -110,6 +118,7 @@
         else if (evt.event === "error") { out.innerHTML = `<p class="err">${evt.data}</p>`; spin.hidden = true; return; }
       }
     }
+    if (window.setCopySource) window.setCopySource("brief-body", pre.textContent);
     if (final) {
       out.innerHTML = final;
       // reading list lives in a sibling container — easiest is full page refresh
@@ -165,7 +174,22 @@
     <form class="form form-grid" hx-post="/projects/{{.ID}}/standing-orders" hx-swap="none">
       <input type="text" name="name" placeholder="name (e.g. 'weekly prior-art scan')" required>
       <input type="text" name="purpose" placeholder="purpose">
-      <input type="text" name="cron" placeholder="cron e.g. '0 8 * * 1'">
+      <div class="cron-control">
+        <select class="cron-preset" data-target="so-cron-{{.ID}}">
+          <option value="">— preset —</option>
+          <option value="@every 5m">every 5m</option>
+          <option value="@every 15m">every 15m</option>
+          <option value="@every 30m">every 30m</option>
+          <option value="@every 1h">every 1h</option>
+          <option value="@every 3h">every 3h</option>
+          <option value="@every 6h">every 6h</option>
+          <option value="@every 12h">every 12h</option>
+          <option value="0 8 * * *">daily 08:00</option>
+          <option value="0 8 * * 1">weekly Mon 08:00</option>
+          <option value="@weekly">@weekly</option>
+        </select>
+        <input id="so-cron-{{.ID}}" type="text" name="cron" placeholder="cron or '@every 1h'">
+      </div>
       <select name="model">
         <option value="flash">flash</option>
         <option value="pro">pro</option>
@@ -208,23 +232,44 @@
 (() => {
   const projectId = {{.Project.ID}};
   setupStream("draft-form",   `/projects/${projectId}/draft`,           "doc",  "doc-spin");
-  setupStreamButton("critique-btn",  `/projects/${projectId}/critique`, "crit", "crit-spin", () => {
-    document.getElementById("apply-btn").disabled = false;
+  setupStreamButton("critique-btn",  `/projects/${projectId}/critique`, "crit", "crit-spin", {
+    focusInputId: "crit-focus",
+    onDone: () => { document.getElementById("apply-btn").disabled = false; },
   });
-  setupStreamButton("apply-btn",     `/projects/${projectId}/apply-critique`, "doc", "crit-spin");
+  setupStreamButton("apply-btn",     `/projects/${projectId}/apply-critique`, "doc", "crit-spin", {
+    focusInputId: "crit-focus",
+    scrollToOut: true,
+  });
 
   function setupStream(formId, url, outId, spinId) {
     const form = document.getElementById(formId);
     if (!form) return;
     form.addEventListener("submit", (ev) => { ev.preventDefault(); runStream(url, new FormData(form), outId, spinId); });
   }
-  function setupStreamButton(btnId, url, outId, spinId, onDone) {
+  function setupStreamButton(btnId, url, outId, spinId, opts) {
+    opts = opts || {};
     const btn = document.getElementById(btnId);
     if (!btn) return;
     btn.addEventListener("click", async () => {
       btn.disabled = true;
-      try { await runStream(url, new FormData(), outId, spinId, onDone); }
-      finally { btn.disabled = false; }
+      const fd = new FormData();
+      if (opts.focusInputId) {
+        const v = document.getElementById(opts.focusInputId)?.value;
+        if (v) fd.set("focus", v);
+      }
+      try {
+        await runStream(url, fd, outId, spinId, () => {
+          if (opts.scrollToOut) {
+            const el = document.getElementById(outId);
+            if (el) {
+              el.scrollIntoView({ behavior: "smooth", block: "start" });
+              el.classList.add("flash-highlight");
+              setTimeout(() => el.classList.remove("flash-highlight"), 1500);
+            }
+          }
+          if (opts.onDone) opts.onDone();
+        });
+      } finally { btn.disabled = false; }
     });
   }
   async function runStream(url, body, outId, spinId, onDone) {
@@ -254,6 +299,9 @@
         else if (evt.event === "error") { out.innerHTML = `<p class="err">${escapeHTML(evt.data)}</p>`; spin.hidden = true; return; }
       }
     }
+    // stash the accumulated markdown for copy-to-clipboard before the
+    // rendered-HTML swap clobbers the <pre>.
+    if (window.setCopySource) window.setCopySource(outId, pre.textContent);
     if (final) out.innerHTML = final;
     spin.hidden = true;
     if (onDone) onDone();

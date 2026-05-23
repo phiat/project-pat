@@ -25,8 +25,10 @@
       {{end}}
       {{if .Output}}
       <tr><td colspan="6">
-        <details><summary class="muted">output</summary>
-          <div class="doc">{{markdown .Output}}</div>
+        <details>
+          <summary class="muted">output {{copyBtn (printf "run-out-%d" .ID)}}</summary>
+          <div class="doc" id="run-out-{{.ID}}">{{markdown .Output}}</div>
+          <textarea hidden class="copy-source" id="copy-src-run-out-{{.ID}}" readonly>{{.Output}}</textarea>
         </details>
       </td></tr>
       {{end}}

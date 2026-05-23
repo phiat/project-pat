@@ -53,9 +53,10 @@
       out.innerHTML = `<p class="err">draft failed (${res.status})</p>`;
       streaming = false; spin.hidden = true; return;
     }
-    out.innerHTML = `<div class="panel" style="margin-top:14px"><div id="quick-meta" class="muted">seed</div><pre id="quick-stream"></pre></div>`;
+    out.innerHTML = `<div class="panel" style="margin-top:14px"><div class="panel-head"><div id="quick-meta" class="muted">seed</div><button class="copy-btn" type="button" aria-label="copy" data-copy-source-id="copy-src-quick"><svg class="copy-icon-default" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg><svg class="copy-icon-done" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg></button></div><pre id="quick-stream"></pre><textarea hidden class="copy-source" id="copy-src-quick" readonly></textarea></div>`;
     const meta = out.querySelector("#quick-meta");
     const pre  = out.querySelector("#quick-stream");
+    const src  = out.querySelector("#copy-src-quick");
     const reader = res.body.getReader();
     const dec = new TextDecoder();
     let buffer = "";
@@ -74,6 +75,7 @@
         else if (evt.event === "error") { out.innerHTML = `<p class="err">${evt.data}</p>`; streaming = false; spin.hidden = true; return; }
       }
     }
+    if (src) src.value = pre.textContent;
     if (final) {
       pre.outerHTML = `<div class="doc">${final}</div>`;
     }

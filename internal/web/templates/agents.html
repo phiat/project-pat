@@ -8,7 +8,22 @@
   <form class="form form-grid" hx-post="/agents" hx-target="#agent-list" hx-swap="outerHTML">
     <input type="text" name="name" placeholder="name (e.g. 'arxiv scanner')" required>
     <input type="text" name="purpose" placeholder="purpose">
-    <input type="text" name="cron" placeholder="cron e.g. '0 8 * * *'">
+    <div class="cron-control">
+      <select class="cron-preset" data-target="agent-cron">
+        <option value="">— preset —</option>
+        <option value="@every 5m">every 5m</option>
+        <option value="@every 15m">every 15m</option>
+        <option value="@every 30m">every 30m</option>
+        <option value="@every 1h">every 1h</option>
+        <option value="@every 3h">every 3h</option>
+        <option value="@every 6h">every 6h</option>
+        <option value="@every 12h">every 12h</option>
+        <option value="0 8 * * *">daily 08:00</option>
+        <option value="0 8 * * 1">weekly Mon 08:00</option>
+        <option value="@weekly">@weekly (Sun 00:00)</option>
+      </select>
+      <input id="agent-cron" type="text" name="cron" placeholder="cron e.g. '0 8 * * *' or '@every 1h'">
+    </div>
     <select name="model">
       <option value="flash">flash</option>
       <option value="pro">pro</option>
@@ -16,6 +31,15 @@
     <textarea name="system_prompt" rows="3" placeholder="system prompt" required></textarea>
     <button type="submit">add agent</button>
   </form>
+<script>
+document.addEventListener("change", (ev) => {
+  const sel = ev.target.closest(".cron-preset");
+  if (!sel || !sel.value) return;
+  const tgt = document.getElementById(sel.dataset.target);
+  if (tgt) tgt.value = sel.value;
+  sel.value = "";
+});
+</script>
 </section>
 
 <section id="agent-list" class="panel">

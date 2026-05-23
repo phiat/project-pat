@@ -51,6 +51,11 @@ var Options = []Option{
 	{"typescript", "runtime", "TypeScript", "", nil},
 	{"node", "runtime", "Node.js", "plain JS, no TS", nil},
 	{"deno", "runtime", "Deno", "", nil},
+	{"zig", "runtime", "Zig", "", nil},
+	{"odin", "runtime", "Odin", "", nil},
+	{"java", "runtime", "Java", "", nil},
+	{"elixir", "runtime", "Elixir", "BEAM VM", nil},
+	{"clojure", "runtime", "Clojure", "JVM Lisp", nil},
 
 	// framework
 	{"htmx-go", "framework", "htmx-over-Go", "stdlib mux + templates", []string{"go"}},
@@ -68,6 +73,16 @@ var Options = []Option{
 	{"actix", "framework", "Actix Web", "", []string{"rust"}},
 	{"clap-tokio", "framework", "clap + tokio", "CLI", []string{"rust"}},
 	{"uv-jupyter", "framework", "uv + Jupyter", "data notebook", []string{"python"}},
+	{"spring-boot", "framework", "Spring Boot", "", []string{"java"}},
+	{"quarkus", "framework", "Quarkus", "", []string{"java"}},
+	{"micronaut", "framework", "Micronaut", "", []string{"java"}},
+	{"phoenix", "framework", "Phoenix", "", []string{"elixir"}},
+	{"ash", "framework", "Ash Framework", "", []string{"elixir"}},
+	{"ring-compojure", "framework", "Ring + Compojure", "", []string{"clojure"}},
+	{"luminus", "framework", "Luminus", "", []string{"clojure"}},
+	{"zig-std", "framework", "Zig stdlib", "no framework", []string{"zig"}},
+	{"odin-std", "framework", "Odin stdlib", "no framework", []string{"odin"}},
+	{"raylib", "framework", "raylib (games)", "", []string{"zig", "odin"}},
 
 	// storage
 	{"sqlite", "storage", "SQLite", "", nil},

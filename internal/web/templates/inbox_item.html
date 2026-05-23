@@ -15,8 +15,12 @@
 </section>
 
 <section class="panel">
-  <header class="panel-head"><h2>output</h2></header>
-  <article class="doc">{{markdown .RunOutput}}</article>
+  <header class="panel-head">
+    <h2>output</h2>
+    {{copyBtn "inbox-out"}}
+  </header>
+  <article class="doc" id="inbox-out">{{markdown .RunOutput}}</article>
+  <textarea hidden class="copy-source" id="copy-src-inbox-out" readonly>{{.RunOutput}}</textarea>
 </section>
 
 {{if $.HasPrev}}

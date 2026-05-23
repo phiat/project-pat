@@ -733,7 +733,11 @@ func (h *Handler) streamCritique(w http.ResponseWriter, r *http.Request, proj *s
 	ctx, cancel := context.WithTimeout(r.Context(), 240*time.Second)
 	defer cancel()
 
+	focus := strings.TrimSpace(r.FormValue("focus"))
 	userPrompt := h.stackContext(proj.ID) + fmt.Sprintf("Project: %s\n\nDesign doc:\n\n%s", proj.Title, proj.DesignDoc)
+	if focus != "" {
+		userPrompt += "\n\nFocus this critique on: " + focus
+	}
 	runID, _ := h.S.StartRun(sql.NullInt64{}, sql.NullInt64{Int64: proj.ID, Valid: true}, "critique", userPrompt)
 	res, err := h.LLM.CompleteStream(ctx, llm.ModelProKey, systemCritiquePrompt, userPrompt,
 		func(chunk string) { writeSSE(w, flusher, "delta", chunk) })
@@ -768,8 +772,12 @@ func (h *Handler) streamApplyCritique(w http.ResponseWriter, r *http.Request, pr
 	ctx, cancel := context.WithTimeout(r.Context(), 240*time.Second)
 	defer cancel()
 
+	focus := strings.TrimSpace(r.FormValue("focus"))
 	userPrompt := h.stackContext(proj.ID) + fmt.Sprintf("Project: %s\n\nExisting design doc:\n\n%s\n\nCritique to address:\n\n%s\n\nProduce a revised design doc that addresses each numbered point in the critique. Preserve sections that the critique didn't flag.",
 		proj.Title, proj.DesignDoc, crit.Body)
+	if focus != "" {
+		userPrompt += "\n\nWhile applying the critique, prioritise: " + focus
+	}
 	runID, _ := h.S.StartRun(sql.NullInt64{}, sql.NullInt64{Int64: proj.ID, Valid: true}, "apply-critique", userPrompt)
 	res, err := h.LLM.CompleteStream(ctx, llm.ModelProKey, systemDesignDocPrompt, userPrompt,
 		func(chunk string) { writeSSE(w, flusher, "delta", chunk) })
@@ -788,6 +796,7 @@ func (h *Handler) streamDraft(w http.ResponseWriter, r *http.Request, proj *stor
 	if modelKey != llm.ModelProKey {
 		modelKey = llm.ModelFlashKey
 	}
+	focus := strings.TrimSpace(r.FormValue("focus"))
 	ctx, cancel := context.WithTimeout(r.Context(), 180*time.Second)
 	defer cancel()
 
@@ -803,6 +812,9 @@ func (h *Handler) streamDraft(w http.ResponseWriter, r *http.Request, proj *stor
 
 	userPrompt := h.stackContext(proj.ID) + fmt.Sprintf("Project title: %s\nSummary: %s\n\nExisting doc (may be empty):\n%s\n\nProduce or refine the design doc.",
 		proj.Title, proj.Summary, proj.DesignDoc)
+	if focus != "" {
+		userPrompt += "\n\nFocus this pass on: " + focus
+	}
 	runID, _ := h.S.StartRun(sql.NullInt64{}, sql.NullInt64{Int64: proj.ID, Valid: true}, "project-draft", userPrompt)
 
 	res, err := h.LLM.CompleteStream(ctx, modelKey, systemDesignDocPrompt, userPrompt, func(chunk string) {
