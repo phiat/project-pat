@@ -64,6 +64,7 @@ func main() {
 	h := handlers.New(st, client, renderer)
 	h.RootCtx = rootCtx
 	h.OnAgentChanged = sc.Reload
+	h.WorkspaceDir = cfg.WorkspaceDir
 
 	mux := http.NewServeMux()
 	h.Mount(mux)

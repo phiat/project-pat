@@ -32,6 +32,9 @@ type Handler struct {
 	// so the scheduler can re-read its set immediately rather than waiting
 	// for the next 30s tick.
 	OnAgentChanged func()
+	// WorkspaceDir is the on-disk root for materialised project artifacts.
+	// Empty disables materialisation.
+	WorkspaceDir string
 }
 
 func New(s *store.Store, l *llm.Client, r *web.Renderer) *Handler {
@@ -145,7 +148,12 @@ func (h *Handler) quickDraft(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) ideaActions(w http.ResponseWriter, r *http.Request) {
-	// /ideas/{id}/promote
+	// /ideas/{id}/promote — POST only; a GET here would let any prefetch
+	// or embedded <img> trigger a project create.
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", 405)
+		return
+	}
 	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
 	if len(parts) != 3 || parts[2] != "promote" {
 		http.NotFound(w, r)
@@ -244,16 +252,26 @@ func (h *Handler) projectActions(w http.ResponseWriter, r *http.Request) {
 		}
 		decisions, _ := h.S.ListArtifacts(proj.ID, "decision")
 		stackData := h.buildStackPanelData(proj)
+		wsPath, wsMaterialized := h.workspacePath(proj)
+		briefRecon, _ := h.S.LatestArtifact(proj.ID, "brief_recon")
+		// Only show reconcile if it's newer than the brief itself (else
+		// it's stale and confusing).
+		if brief != nil && briefRecon != nil && briefRecon.CreatedAt.Before(brief.CreatedAt) {
+			briefRecon = nil
+		}
 		h.render(w, "project_detail", map[string]any{
-			"Title":      proj.Title,
-			"Project":    proj,
-			"Critique":   critique,
-			"Orders":     orders,
-			"Timeline":   timeline,
-			"Brief":      brief,
-			"BriefItems": briefItems,
-			"Decisions":  decisions,
-			"Stack":      stackData,
+			"Title":           proj.Title,
+			"Project":         proj,
+			"Critique":        critique,
+			"Orders":          orders,
+			"Timeline":        timeline,
+			"Brief":           brief,
+			"BriefItems":      briefItems,
+			"BriefRecon":      briefRecon,
+			"Decisions":       decisions,
+			"Stack":           stackData,
+			"WorkspacePath":   wsPath,
+			"WorkspaceOnDisk": wsMaterialized,
 		})
 		return
 	}
@@ -274,6 +292,9 @@ func (h *Handler) projectActions(w http.ResponseWriter, r *http.Request) {
 		case "brief":
 			h.streamBrief(w, r, proj)
 			return
+		case "brief-reconcile":
+			h.streamBriefReconcile(w, r, proj)
+			return
 		case "stack":
 			h.stackUpsert(w, r, proj)
 			return
@@ -282,6 +303,15 @@ func (h *Handler) projectActions(w http.ResponseWriter, r *http.Request) {
 			return
 		case "decisions":
 			h.commitDecision(w, r, proj)
+			return
+		case "materialize":
+			h.materializeProject(w, r, proj)
+			return
+		case "team-draft":
+			h.streamTeamDraft(w, r, proj)
+			return
+		case "prototype":
+			h.streamPrototype(w, r, proj)
 			return
 		}
 	}
@@ -675,6 +705,68 @@ func (h *Handler) streamBrief(w http.ResponseWriter, r *http.Request, proj *stor
 	})
 }
 
+// streamBriefReconcile re-reads the latest brief against the user's
+// per-item reading notes and produces a fresh artifact ("brief_recon")
+// that names what the notes confirmed, complicated, or opened up.
+func (h *Handler) streamBriefReconcile(w http.ResponseWriter, r *http.Request, proj *store.Project) {
+	brief, err := h.S.LatestArtifact(proj.ID, "brief")
+	if err != nil || brief == nil {
+		http.Error(w, "no brief to reconcile", 400)
+		return
+	}
+	items, _ := h.S.ListBriefItems(brief.ID)
+	if !anyBriefNotes(items) {
+		http.Error(w, "no per-item notes yet — read a few items first", 400)
+		return
+	}
+	var notes strings.Builder
+	for _, it := range items {
+		if strings.TrimSpace(it.Note) == "" && it.Status != "read" {
+			continue
+		}
+		marker := "[unread]"
+		switch it.Status {
+		case "read":
+			marker = "[read]"
+		case "reading":
+			marker = "[reading]"
+		}
+		fmt.Fprintf(&notes, "- %s %s\n", marker, it.Text)
+		if strings.TrimSpace(it.Note) != "" {
+			fmt.Fprintf(&notes, "  note: %s\n", oneLine(it.Note))
+		}
+	}
+	userPrompt := fmt.Sprintf(
+		"Project: %s\nSummary: %s\n\nOriginal brief:\n\n%s\n\nReading log (status + the author's per-item notes):\n\n%s\n\nProduce the reconciliation pass.",
+		proj.Title, proj.Summary, brief.Body, notes.String(),
+	)
+	h.streamSSE(w, r, streamSpec{
+		trigger:   "brief-reconcile",
+		projectID: sql.NullInt64{Int64: proj.ID, Valid: true},
+		modelKey:  llm.ModelProKey,
+		system:    systemBriefReconcilePrompt,
+		user:      userPrompt,
+		timeout:   240 * time.Second,
+		onSuccess: func(text string, runID int64) (string, string) {
+			if _, err := h.S.CreateArtifact(store.Artifact{
+				ProjectID: proj.ID, Kind: "brief_recon", Title: brief.Title, Body: text,
+			}); err != nil {
+				log.Printf("brief_recon artifact: %v", err)
+			}
+			return string(web.RenderMarkdown(text)), ""
+		},
+	})
+}
+
+func anyBriefNotes(items []store.BriefItem) bool {
+	for _, it := range items {
+		if strings.TrimSpace(it.Note) != "" || it.Status == "read" {
+			return true
+		}
+	}
+	return false
+}
+
 func (h *Handler) briefActions(w http.ResponseWriter, r *http.Request) {
 	// /briefs/{briefID}/items/{itemID}/{action}
 	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
@@ -874,9 +966,9 @@ func writeSSE(w http.ResponseWriter, f http.Flusher, event, data string) {
 	f.Flush()
 }
 
-// openSSE writes the SSE response headers and returns the Flusher.
-// Returns nil if the response writer doesn't support flushing (caller
-// has already sent http.Error in that case).
+// openSSE sets the SSE response headers and returns the Flusher. Headers
+// are only committed when the first event is flushed, so callers can
+// still emit a plain http.Error before openSSE is called.
 func openSSE(w http.ResponseWriter) http.Flusher {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
@@ -886,7 +978,6 @@ func openSSE(w http.ResponseWriter) http.Flusher {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("X-Accel-Buffering", "no")
-	w.WriteHeader(200)
 	return flusher
 }
 
@@ -910,12 +1001,20 @@ type streamSpec struct {
 }
 
 // streamSSE handles the common shape of every LLM-streaming endpoint:
-// headers, optional pre-events, run row, deltas, finish, end. Errors
-// from StartRun are surfaced to the client and abort the call (previously
-// they were silently swallowed).
+// run row, headers, optional pre-events, deltas, finish, end. StartRun
+// runs *before* SSE headers are committed so a DB failure surfaces as a
+// plain 500. Partial output is preserved if the client disconnects mid-stream.
 func (h *Handler) streamSSE(w http.ResponseWriter, r *http.Request, spec streamSpec) {
+	runID, err := h.S.StartRun(spec.agentID, spec.projectID, spec.trigger, spec.user)
+	if err != nil {
+		log.Printf("startRun(%s): %v", spec.trigger, err)
+		http.Error(w, spec.trigger+": failed to record run", 500)
+		return
+	}
+
 	flusher := openSSE(w)
 	if flusher == nil {
+		_ = h.S.FinishRun(runID, "failed", "", "streaming unsupported", 0, 0)
 		return
 	}
 	for _, e := range spec.preEvents {
@@ -929,18 +1028,21 @@ func (h *Handler) streamSSE(w http.ResponseWriter, r *http.Request, spec streamS
 	ctx, cancel := context.WithTimeout(r.Context(), timeout)
 	defer cancel()
 
-	runID, err := h.S.StartRun(spec.agentID, spec.projectID, spec.trigger, spec.user)
-	if err != nil {
-		log.Printf("startRun(%s): %v", spec.trigger, err)
-		writeSSE(w, flusher, "error", spec.trigger+": failed to record run: "+err.Error())
-		return
-	}
-
+	// Accumulate chunks so we can persist partial output if the client
+	// disconnects (ctx cancelled before LLM completes).
+	var partial strings.Builder
 	res, err := h.LLM.CompleteStream(ctx, spec.modelKey, spec.system, spec.user, func(chunk string) {
+		partial.WriteString(chunk)
 		writeSSE(w, flusher, "delta", chunk)
 	})
 	if err != nil {
-		if fErr := h.S.FinishRun(runID, "failed", "", err.Error(), 0, 0); fErr != nil {
+		status := "failed"
+		// If the request context died (tab close, network drop) we still
+		// want to keep whatever streamed so far rather than lose it.
+		if r.Context().Err() != nil && partial.Len() > 0 {
+			status = "cancelled"
+		}
+		if fErr := h.S.FinishRun(runID, status, partial.String(), err.Error(), 0, 0); fErr != nil {
 			log.Printf("finishRun(%d): %v", runID, fErr)
 		}
 		writeSSE(w, flusher, "error", spec.trigger+" failed: "+err.Error())
@@ -960,6 +1062,101 @@ func (h *Handler) streamSSE(w http.ResponseWriter, r *http.Request, spec streamS
 	} else {
 		writeSSE(w, flusher, "end", string(web.RenderMarkdown(res.Text)))
 	}
+}
+
+// ---- multi-agent team draft (planner → critic → drafter) ----
+
+// streamTeamDraft runs three sequential pro passes:
+//   1. planner  — produces a structured plan/outline given the current doc.
+//   2. critic   — critiques the plan, names risks, suggests adjustments.
+//   3. drafter  — produces the final design doc using plan + critique.
+// Intermediate phases are persisted as artifacts so the chain is auditable;
+// the drafter's output overwrites the project's design doc. The client
+// stream emits "phase" SSE events between phases so the UI can re-anchor.
+func (h *Handler) streamTeamDraft(w http.ResponseWriter, r *http.Request, proj *store.Project) {
+	runID, err := h.S.StartRun(sql.NullInt64{}, sql.NullInt64{Int64: proj.ID, Valid: true}, "team-draft", proj.Title)
+	if err != nil {
+		log.Printf("team-draft startRun: %v", err)
+		http.Error(w, "failed to record run", 500)
+		return
+	}
+	flusher := openSSE(w)
+	if flusher == nil {
+		_ = h.S.FinishRun(runID, "failed", "", "streaming unsupported", 0, 0)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 8*time.Minute)
+	defer cancel()
+
+	stackCtx := h.stackContext(proj.ID)
+	decCtx := h.decisionsContext(proj.ID)
+	baseCtx := stackCtx + decCtx + fmt.Sprintf("Project: %s\nSummary: %s\n\nExisting doc (may be empty):\n%s\n",
+		proj.Title, proj.Summary, proj.DesignDoc)
+
+	totalIn, totalOut := 0, 0
+	abort := func(phase string, err error, accum string) {
+		// Persist whatever the in-flight phase managed to stream and bail.
+		writeSSE(w, flusher, "error", phase+": "+err.Error())
+		status := "failed"
+		if r.Context().Err() != nil && accum != "" {
+			status = "cancelled"
+		}
+		_ = h.S.FinishRun(runID, status, accum, phase+": "+err.Error(), totalIn, totalOut)
+	}
+
+	// Phase 1: planner
+	writeSSE(w, flusher, "phase", "planner")
+	var plan strings.Builder
+	plannerRes, err := h.LLM.CompleteStream(ctx, llm.ModelProKey, systemTeamPlannerPrompt,
+		baseCtx+"\nProduce a structured plan as instructed.",
+		func(c string) { plan.WriteString(c); writeSSE(w, flusher, "delta", c) })
+	if err != nil {
+		abort("planner", err, plan.String())
+		return
+	}
+	totalIn += plannerRes.TokensIn
+	totalOut += plannerRes.TokensOut
+	if _, e := h.S.CreateArtifact(store.Artifact{ProjectID: proj.ID, Kind: "team_plan", Body: plannerRes.Text}); e != nil {
+		log.Printf("team_plan artifact: %v", e)
+	}
+
+	// Phase 2: critic
+	writeSSE(w, flusher, "phase", "critic")
+	var crit strings.Builder
+	criticUser := baseCtx + fmt.Sprintf("\nPlan to critique:\n\n%s\n", plannerRes.Text)
+	criticRes, err := h.LLM.CompleteStream(ctx, llm.ModelProKey, systemTeamCriticPrompt, criticUser,
+		func(c string) { crit.WriteString(c); writeSSE(w, flusher, "delta", c) })
+	if err != nil {
+		abort("critic", err, crit.String())
+		return
+	}
+	totalIn += criticRes.TokensIn
+	totalOut += criticRes.TokensOut
+	if _, e := h.S.CreateArtifact(store.Artifact{ProjectID: proj.ID, Kind: "team_critique", Body: criticRes.Text}); e != nil {
+		log.Printf("team_critique artifact: %v", e)
+	}
+
+	// Phase 3: drafter
+	writeSSE(w, flusher, "phase", "drafter")
+	var draft strings.Builder
+	drafterUser := baseCtx + fmt.Sprintf("\nPlanner output:\n\n%s\n\nCritic notes on the plan:\n\n%s\n\nProduce the final design doc that resolves the critic's notes and follows the agreed plan.",
+		plannerRes.Text, criticRes.Text)
+	drafterRes, err := h.LLM.CompleteStream(ctx, llm.ModelProKey, systemDesignDocPrompt, drafterUser,
+		func(c string) { draft.WriteString(c); writeSSE(w, flusher, "delta", c) })
+	if err != nil {
+		abort("drafter", err, draft.String())
+		return
+	}
+	totalIn += drafterRes.TokensIn
+	totalOut += drafterRes.TokensOut
+
+	if err := h.S.UpdateProjectDoc(proj.ID, drafterRes.Text); err != nil {
+		log.Printf("team-draft updateProjectDoc: %v", err)
+	}
+	if e := h.S.FinishRun(runID, "ok", drafterRes.Text, "", totalIn, totalOut); e != nil {
+		log.Printf("team-draft finishRun: %v", e)
+	}
+	writeSSE(w, flusher, "end", string(web.RenderMarkdown(drafterRes.Text)))
 }
 
 // ---- agents ----
@@ -1333,9 +1530,8 @@ func (h *Handler) buildFloorTiles() []floorTile {
 	for _, p := range projs {
 		t := floorTile{Project: p}
 		t.LastPara = lastParagraph(p.DesignDoc, 240)
-		if decs, _ := h.S.ListArtifacts(p.ID, "decision"); len(decs) > 0 {
-			d := decs[0]
-			t.LastDecision = &d
+		if d, err := h.S.LatestArtifact(p.ID, "decision"); err == nil && d != nil {
+			t.LastDecision = d
 		}
 		if n, err := h.S.UnreadInboxCountForProject(p.ID); err == nil {
 			t.UnreadInbox = n
@@ -1561,10 +1757,9 @@ func renderAgentList(w http.ResponseWriter, agents []store.Agent) {
 	fmt.Fprintln(w, `</tbody></table></section>`)
 }
 
-func htmlEscape(s string) string {
-	r := strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;", `"`, "&#34;", `'`, "&#39;")
-	return r.Replace(s)
-}
+// htmlEscape aliases the stdlib escaper so call sites don't churn; this
+// avoids allocating a fresh strings.Replacer on every invocation.
+var htmlEscape = template.HTMLEscapeString
 
 func firstLineSummary(s string, n int) string {
 	s = strings.TrimSpace(s)
@@ -1628,6 +1823,66 @@ Rules:
 - NEVER repeat a question that's already a resolved decision in the list.
 
 Output the question alone, no quotes, no formatting.`
+
+const systemPrototypePrompt = "You scaffold a minimal runnable prototype repo for a project, given its design doc and chosen stack. Output ONLY a fenced JSON block with this shape:\n\n```json\n{\n  \"files\": [\n    {\"path\": \"main.go\", \"content\": \"...\"},\n    {\"path\": \"README.md\", \"content\": \"...\"}\n  ]\n}\n```\n\nRules:\n- 3-8 files total (hard max 12)\n- paths are RELATIVE; never use a leading / or .. — no traversal\n- each file content under 4 KB\n- include: an entry point, the dependency manifest for the chosen runtime (go.mod / package.json / pyproject.toml / Cargo.toml / etc.), and a README.md explaining how to run it\n- the prototype should compile/run end-to-end on a fresh dev machine — no missing imports, no TODO placeholders that block running\n- mirror the chosen stack exactly; if the stack is empty or self-contradictory, pick the smallest sensible default and call that out in the README\n- output the JSON block and absolutely NOTHING else (no preamble, no trailing commentary)"
+
+const systemTeamPlannerPrompt = `You are the planner on a small engineering team. Given a project's existing design notes (possibly empty), produce a structured plan that the rest of the team will use as scaffolding for the final design doc.
+
+Output Markdown with these sections, in order:
+
+## Frame
+2-4 sentences that name the actual problem to be solved, in the author's voice. Avoid generic framings.
+
+## Plan outline
+Numbered list of 4-8 work-units. Each item: a short headline (bold) + one sentence on what it produces or proves. Sequence matters — earlier items must be doable without later ones.
+
+## Risks
+Bulleted list. 3-5 things that could derail this if not addressed early.
+
+## Open levers
+Bulleted list. 2-4 decisions the author still needs to make where the choice meaningfully changes the plan.
+
+Keep total length under ~450 words. Do not draft the final design doc — that's the drafter's job.`
+
+const systemTeamCriticPrompt = `You are the critic on a small engineering team. The planner has produced a plan; before the drafter writes the final design doc, you give the plan a hard read.
+
+Output Markdown with these sections, in order:
+
+## Verdict
+One sentence: is this plan sound, partly sound, or off? Be direct.
+
+## What's right
+Bulleted list. 2-4 things the plan got right that the drafter should preserve verbatim.
+
+## Adjustments
+Numbered list. Specific changes the drafter should make: reorder a step, drop a step, expand a vague bullet, swap an assumption. Reference plan items by their headline. 3-6 items.
+
+## Gut-check questions for the drafter
+Bulleted list. 2-3 questions the drafter should be able to answer in the doc — if they can't, the plan isn't ready.
+
+Keep total length under ~400 words. Don't redraft the plan; emit edits.`
+
+const systemBriefReconcilePrompt = `You re-read a research brief alongside the author's notes from doing the reading. The brief was generated upfront; the notes capture what actually held up versus what didn't. Your job is to produce a tight reconciliation — what changed and what to do next.
+
+Output Markdown with these sections, in order, and NOTHING else:
+
+## Confirmed
+Bulleted list. Claims (or supporting reasons) from the original brief that the author's notes strengthened. Quote or paraphrase the specific note that confirmed it.
+
+## Complicated
+Bulleted list. Claims that the notes weakened, contradicted, or muddied. Be specific about which note did the complicating.
+
+## New open questions
+Numbered list (start fresh — don't reuse the brief's numbering). Questions that the notes surfaced and the original brief did not anticipate. 2-5 items.
+
+## Suggested next moves
+Numbered list. Concrete things the author should do next: re-read a source, look up X, draft a section, run an experiment. 2-5 items.
+
+Rules:
+- ground every claim in a specific item from the reading log when possible — naming the item by its text or a short paraphrase
+- if an item has [read] status but no note, treat its content as "consumed but unannotated" and don't fabricate what the author thought
+- never invent notes the author didn't write
+- keep total length under ~500 words`
 
 const systemClustererPrompt = `You are clustering a user's open ideas to surface hidden adjacencies.
 

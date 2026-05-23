@@ -9,6 +9,12 @@
   <div class="page-head-right">
     {{statusPill .Status}}
     <span class="muted">{{.Slug}}</span>
+    <form hx-post="/projects/{{.ID}}/materialize" hx-swap="none" style="display:inline">
+      <button class="btn-ghost" type="submit" title="write design/critique/brief/decisions/stack to workspace/{{.Slug}}/">
+        {{if $.WorkspaceOnDisk}}↻ re-materialize{{else}}↓ materialize{{end}}
+      </button>
+    </form>
+    {{if $.WorkspaceOnDisk}}<span class="muted mono" title="{{$.WorkspacePath}}">workspace/{{.Slug}}/</span>{{end}}
   </div>
 </section>
 
@@ -24,8 +30,11 @@
         <option value="pro">pro · deeper</option>
       </select>
       <button class="btn-primary" type="submit">draft / refine</button>
+      <button id="team-btn" class="btn-ghost" type="button" title="run a planner → critic → drafter chain across three pro passes">team draft (pro chain)</button>
+      <button id="proto-btn" class="btn-ghost" type="button" title="scaffold a runnable repo skeleton under workspace/{{.Slug}}/proto/">scaffold prototype</button>
       {{copyBtn "doc"}}
       <span id="doc-spin" class="muted" hidden>streaming…</span>
+      <span id="team-phase" class="muted" hidden></span>
     </form>
   </header>
   <article id="doc" class="doc" aria-live="polite">
@@ -160,9 +169,40 @@
       </li>
       {{end}}
     </ul>
+    <div class="ctrl-row" style="margin-top:8px">
+      <button id="reconcile-btn" class="btn-ghost" type="button" title="re-read the brief against your per-item notes">reconcile against notes (pro)</button>
+      <span id="recon-spin" class="muted" hidden>streaming…</span>
+    </div>
+    <article id="brief-recon" class="doc" aria-live="polite" style="margin-top:8px">
+      {{with $.BriefRecon}}<h3 class="brief-list-head">reconciliation</h3>{{markdown .Body}}{{end}}
+    </article>
   </div>
   {{end}}
 </section>
+<script>
+(() => {
+  const btn = document.getElementById("reconcile-btn");
+  if (!btn) return;
+  const out  = document.getElementById("brief-recon");
+  const spin = document.getElementById("recon-spin");
+  const projectId = {{.Project.ID}};
+  let busy = false;
+  btn.addEventListener("click", async () => {
+    if (busy) return; busy = true;
+    btn.disabled = true; spin.hidden = false;
+    out.innerHTML = `<h3 class="brief-list-head">reconciliation</h3><pre class="stream-pre" aria-live="polite"></pre>`;
+    const pre = out.querySelector(".stream-pre");
+    let final = null;
+    const result = await window.streamSSE(`/projects/${projectId}/brief-reconcile`, new FormData(), {
+      onDelta: (text) => { pre.textContent += text; },
+      onEnd:   (html) => { final = html; },
+      onError: (msg)  => { out.innerHTML = `<p class="err">${window.escapeHTML(msg)}</p>`; },
+    });
+    if (result.ok && final) out.innerHTML = `<h3 class="brief-list-head">reconciliation</h3>` + final;
+    spin.hidden = true; btn.disabled = false; busy = false;
+  });
+})();
+</script>
 
 <script>
 (() => {
@@ -272,6 +312,8 @@
 (() => {
   const projectId = {{.Project.ID}};
   setupStream("draft-form",   `/projects/${projectId}/draft`,           "doc",  "doc-spin");
+  setupTeamDraft(projectId);
+  setupPrototype(projectId);
   setupStreamButton("critique-btn",  `/projects/${projectId}/critique`, "crit", "crit-spin", {
     focusInputId: "crit-focus",
     onDone: () => { document.getElementById("apply-btn").disabled = false; },
@@ -310,6 +352,69 @@
           if (opts.onDone) opts.onDone();
         });
       } finally { btn.disabled = false; }
+    });
+  }
+  function setupTeamDraft(pid) {
+    const btn = document.getElementById("team-btn");
+    if (!btn) return;
+    const phase = document.getElementById("team-phase");
+    const out = document.getElementById("doc");
+    const spin = document.getElementById("doc-spin");
+    btn.addEventListener("click", async () => {
+      btn.disabled = true;
+      spin.hidden = false;
+      phase.hidden = false;
+      phase.textContent = "phase: planner…";
+      out.innerHTML = `<div class="muted">planner →</div><pre class="stream-pre" aria-live="polite"></pre>`;
+      let pre = out.querySelector(".stream-pre");
+      let final = null;
+      const result = await window.streamSSE(`/projects/${pid}/team-draft`, new FormData(), {
+        onDelta: (text) => { pre.textContent += text; },
+        onPhase: (p) => {
+          phase.textContent = "phase: " + p + "…";
+          out.insertAdjacentHTML("beforeend", `<div class="muted">${p} →</div><pre class="stream-pre" aria-live="polite"></pre>`);
+          const pres = out.querySelectorAll(".stream-pre");
+          pre = pres[pres.length - 1];
+        },
+        onEnd: (html) => { final = html; },
+        onError: (msg) => { out.innerHTML = `<p class="err">${window.escapeHTML(msg)}</p>`; },
+      });
+      if (result.ok && final) out.innerHTML = final;
+      spin.hidden = true;
+      phase.hidden = true;
+      btn.disabled = false;
+    });
+  }
+  function setupPrototype(pid) {
+    const btn = document.getElementById("proto-btn");
+    if (!btn) return;
+    btn.addEventListener("click", async () => {
+      btn.disabled = true;
+      const out = document.getElementById("doc");
+      const spin = document.getElementById("doc-spin");
+      spin.hidden = false;
+      const status = document.createElement("div");
+      status.className = "muted";
+      status.textContent = "scaffolding prototype…";
+      out.prepend(status);
+      try {
+        const res = await fetch(`/projects/${pid}/prototype`, { method: "POST" });
+        const text = await res.text();
+        if (res.ok) {
+          status.classList.remove("muted");
+          status.classList.add("ok");
+          status.textContent = "prototype scaffolded · " + text.trim();
+        } else {
+          status.classList.add("err");
+          status.textContent = "scaffold failed: " + text.trim();
+        }
+      } catch (err) {
+        status.classList.add("err");
+        status.textContent = "scaffold error: " + err;
+      } finally {
+        spin.hidden = true;
+        btn.disabled = false;
+      }
     });
   }
   async function runStream(url, body, outId, spinId, onDone) {

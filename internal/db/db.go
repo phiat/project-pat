@@ -16,11 +16,13 @@ func Open(path string) (*sql.DB, error) {
 	if err != nil {
 		return nil, err
 	}
-	// modernc.org/sqlite supports concurrent reads; serialise writes via a
-	// single writer connection at the driver level by capping max open
-	// connections — avoids SQLITE_BUSY churn under scheduler+HTTP load.
-	db.SetMaxOpenConns(8)
-	db.SetMaxIdleConns(4)
+	// Single writer connection. With _txlock=immediate, two connections
+	// racing to BEGIN can hit SQLITE_BUSY despite busy_timeout — capping
+	// at one removes the contention entirely. database/sql serialises
+	// callers behind this single conn, which is fine for a single-user
+	// workshop and avoids any chance of write-write deadlock.
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
 	if err := db.Ping(); err != nil {
 		db.Close()
 		return nil, err

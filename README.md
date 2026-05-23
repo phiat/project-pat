@@ -1,6 +1,15 @@
 # project-pat
 
-a single-user workshop for ideation, periodic research, and design-doc drafting — powered by deepseek agents, served as htmx-over-go.
+![go](https://img.shields.io/badge/go-1.26-00ADD8?logo=go&logoColor=white)
+![htmx](https://img.shields.io/badge/htmx-2-3D72D7?logo=htmx&logoColor=white)
+![sqlite](https://img.shields.io/badge/sqlite-pure--go-003B57?logo=sqlite&logoColor=white)
+![providers](https://img.shields.io/badge/llm-7%20providers-6f42c1)
+![status](https://img.shields.io/badge/status-scaffolding-orange)
+![license](https://img.shields.io/badge/license-unlicensed-lightgrey)
+
+![overview](docs/overview.png)
+
+a single-user workshop for ideation, periodic research, and design-doc drafting — powered by deepseek (or any OpenAI-compatible / Anthropic) agents, served as htmx-over-go.
 
 > **status**: scaffolding. core flows are wired (ideas → projects → design docs, cron-scheduled agents, run log). prototype-from-doc / sandboxes / workspace materialization are stubs to fill in next.
 

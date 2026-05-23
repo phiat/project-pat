@@ -7,6 +7,7 @@ package llm
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"strings"
 )
 
@@ -67,23 +68,33 @@ func New(opts Opts) (*Client, error) {
 	if p == "" {
 		p = "openai"
 	}
+	base, defURL := opts.BaseURL, ""
 	switch p {
 	case "anthropic", "claude":
-		return &Client{drv: newAnthropic(opts, baseURLOrDefault(opts.BaseURL, "https://api.anthropic.com/v1"))}, nil
+		defURL = "https://api.anthropic.com/v1"
 	case "openai":
-		return &Client{drv: newOpenAI("openai", opts, baseURLOrDefault(opts.BaseURL, "https://api.openai.com/v1"))}, nil
+		defURL = "https://api.openai.com/v1"
 	case "deepseek":
-		return &Client{drv: newOpenAI("deepseek", opts, baseURLOrDefault(opts.BaseURL, "https://api.deepseek.com/v1"))}, nil
+		defURL = "https://api.deepseek.com/v1"
 	case "openrouter":
-		return &Client{drv: newOpenAI("openrouter", opts, baseURLOrDefault(opts.BaseURL, "https://openrouter.ai/api/v1"))}, nil
+		defURL = "https://openrouter.ai/api/v1"
 	case "ollama":
-		return &Client{drv: newOpenAI("ollama", opts, baseURLOrDefault(opts.BaseURL, "http://localhost:11434/v1"))}, nil
+		defURL = "http://localhost:11434/v1"
 	case "groq":
-		return &Client{drv: newOpenAI("groq", opts, baseURLOrDefault(opts.BaseURL, "https://api.groq.com/openai/v1"))}, nil
+		defURL = "https://api.groq.com/openai/v1"
 	case "together":
-		return &Client{drv: newOpenAI("together", opts, baseURLOrDefault(opts.BaseURL, "https://api.together.xyz/v1"))}, nil
+		defURL = "https://api.together.xyz/v1"
+	default:
+		return nil, fmt.Errorf("unknown LLM provider %q (try: openai, deepseek, anthropic, openrouter, ollama, groq, together)", opts.Provider)
 	}
-	return nil, fmt.Errorf("unknown LLM provider %q (try: openai, deepseek, anthropic, openrouter, ollama, groq, together)", opts.Provider)
+	resolved, err := resolveBaseURL(base, defURL)
+	if err != nil {
+		return nil, fmt.Errorf("LLM_BASE_URL: %w", err)
+	}
+	if p == "anthropic" || p == "claude" {
+		return &Client{drv: newAnthropic(opts, resolved)}, nil
+	}
+	return &Client{drv: newOpenAI(p, opts, resolved)}, nil
 }
 
 // ReasoningFor returns the configured effort for a tier key (informational).
@@ -101,9 +112,25 @@ func (c *Client) CompleteStream(ctx context.Context, modelKey, system, user stri
 	return c.drv.CompleteStream(ctx, modelKey, system, user, onChunk)
 }
 
-func baseURLOrDefault(base, def string) string {
+// resolveBaseURL validates a user-supplied LLM_BASE_URL or falls back to
+// the provider default. Only http/https are allowed — this blocks file://,
+// gopher://, and other schemes that the stdlib http client happens to
+// understand (and SSRF-flavoured surprises like file:///etc/passwd).
+func resolveBaseURL(base, def string) (string, error) {
 	if strings.TrimSpace(base) == "" {
-		return def
+		return def, nil
 	}
-	return strings.TrimRight(base, "/")
+	u, err := url.Parse(strings.TrimSpace(base))
+	if err != nil {
+		return "", fmt.Errorf("invalid URL: %w", err)
+	}
+	switch strings.ToLower(u.Scheme) {
+	case "http", "https":
+	default:
+		return "", fmt.Errorf("scheme %q not allowed; use http or https", u.Scheme)
+	}
+	if u.Host == "" {
+		return "", fmt.Errorf("missing host")
+	}
+	return strings.TrimRight(u.String(), "/"), nil
 }
