@@ -279,6 +279,29 @@ button:hover { filter: brightness(1.1); }
 .diff-del .diff-mark { color: var(--c-err); }
 .diff-gap  { color: var(--c-sage); text-align: center; padding: 2px 0; }
 
+.board-panel {
+  padding: 0;
+  height: calc(100vh - 280px);
+  min-height: 420px;
+  overflow: hidden;
+  position: relative;
+}
+#board-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  background: rgba(13, 34, 8, 0.35);
+}
+.board-empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  pointer-events: none;
+}
+
 .brief-list-wrap { margin-top: 6px; }
 .brief-list-head {
   font-size: 12px;

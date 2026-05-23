@@ -90,6 +90,24 @@ CREATE TABLE IF NOT EXISTS inbox_items (
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS idea_clusters (
+    id        INTEGER PRIMARY KEY AUTOINCREMENT,
+    label     TEXT NOT NULL,
+    position  INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS idea_cluster_members (
+    cluster_id INTEGER NOT NULL REFERENCES idea_clusters(id) ON DELETE CASCADE,
+    idea_id    INTEGER NOT NULL REFERENCES ideas(id) ON DELETE CASCADE,
+    PRIMARY KEY (cluster_id, idea_id)
+);
+CREATE TABLE IF NOT EXISTS idea_links (
+    idea_a INTEGER NOT NULL REFERENCES ideas(id) ON DELETE CASCADE,
+    idea_b INTEGER NOT NULL REFERENCES ideas(id) ON DELETE CASCADE,
+    weight REAL NOT NULL,
+    reason TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (idea_a, idea_b)
+);
+
 CREATE TABLE IF NOT EXISTS brief_items (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     brief_id   INTEGER NOT NULL REFERENCES artifacts(id) ON DELETE CASCADE,

@@ -1,0 +1,29 @@
+{{define "content"}}
+<section class="page-head">
+  <div class="page-head-left">
+    <h1>board</h1>
+    <p class="muted">your idea constellation · {{.IdeaCount}} ideas · pro clusters, edges, and synthesizes pairs</p>
+  </div>
+  <div class="page-head-right">
+    <button id="cluster-btn" class="btn-primary" type="button">cluster ideas (pro)</button>
+    <button id="synth-btn"   class="btn-ghost"   type="button" disabled>synthesize selected</button>
+    <span id="board-spin" class="muted" hidden>thinking…</span>
+  </div>
+</section>
+
+<section class="panel board-panel">
+  <canvas id="board-canvas"></canvas>
+  <div id="board-empty" class="board-empty muted" hidden>
+    no graph yet. capture more ideas, then click <em>cluster ideas</em> to map them.
+  </div>
+</section>
+
+<section class="panel" id="board-summary">
+  <header class="panel-head"><h2>clusterer notes</h2></header>
+  <article id="cluster-notes" class="doc muted">
+    no run yet.
+  </article>
+</section>
+
+<script src="/static/js/board.js" type="module" defer></script>
+{{end}}

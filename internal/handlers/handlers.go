@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"html/template"
 	"log"
@@ -39,6 +40,10 @@ func (h *Handler) Mount(mux *http.ServeMux) {
 	mux.HandleFunc("/inbox", h.inbox)
 	mux.HandleFunc("/inbox/", h.inboxActions)
 	mux.HandleFunc("/briefs/", h.briefActions)
+	mux.HandleFunc("/board", h.board)
+	mux.HandleFunc("/board/cluster", h.boardCluster)
+	mux.HandleFunc("/board/synthesize", h.boardSynthesize)
+	mux.HandleFunc("/board/data", h.boardData)
 }
 
 func (h *Handler) home(w http.ResponseWriter, r *http.Request) {
@@ -613,6 +618,272 @@ func (h *Handler) agentActions(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(202)
 }
 
+// ---- board ----
+
+type boardPayload struct {
+	Ideas    []boardIdeaJSON    `json:"ideas"`
+	Clusters []boardClusterJSON `json:"clusters"`
+	Links    []boardLinkJSON    `json:"links"`
+}
+type boardIdeaJSON struct {
+	ID        int64  `json:"id"`
+	Title     string `json:"title"`
+	Body      string `json:"body"`
+	ClusterID int64  `json:"cluster_id"`
+}
+type boardClusterJSON struct {
+	ID    int64  `json:"id"`
+	Label string `json:"label"`
+}
+type boardLinkJSON struct {
+	A      int64   `json:"a"`
+	B      int64   `json:"b"`
+	Weight float64 `json:"weight"`
+	Reason string  `json:"reason"`
+}
+
+func (h *Handler) board(w http.ResponseWriter, r *http.Request) {
+	ideas, _ := h.S.ListBoardIdeas()
+	h.render(w, "board", map[string]any{
+		"Title":     "board",
+		"IdeaCount": len(ideas),
+	})
+}
+
+func (h *Handler) boardData(w http.ResponseWriter, r *http.Request) {
+	ideas, _ := h.S.ListBoardIdeas()
+	clusters, _ := h.S.ListClusters()
+	links, _ := h.S.ListIdeaLinks()
+
+	out := boardPayload{}
+	for _, i := range ideas {
+		var cid int64
+		if i.ClusterID.Valid {
+			cid = i.ClusterID.Int64
+		}
+		out.Ideas = append(out.Ideas, boardIdeaJSON{ID: i.ID, Title: i.Title, Body: i.Body, ClusterID: cid})
+	}
+	for _, c := range clusters {
+		out.Clusters = append(out.Clusters, boardClusterJSON{ID: c.ID, Label: c.Label})
+	}
+	for _, l := range links {
+		out.Links = append(out.Links, boardLinkJSON{A: l.A, B: l.B, Weight: l.Weight, Reason: l.Reason})
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(out)
+}
+
+func (h *Handler) boardCluster(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method", 405)
+		return
+	}
+	ideas, err := h.S.ListIdeas()
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	if len(ideas) < 2 {
+		http.Error(w, "need at least 2 ideas to cluster", 400)
+		return
+	}
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming unsupported", 500)
+		return
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("X-Accel-Buffering", "no")
+	w.WriteHeader(200)
+
+	ctx, cancel := context.WithTimeout(r.Context(), 240*time.Second)
+	defer cancel()
+
+	var b strings.Builder
+	b.WriteString("Ideas:\n")
+	for _, i := range ideas {
+		fmt.Fprintf(&b, "- id=%d title=%q body=%q\n", i.ID, i.Title, truncate(i.Body, 280))
+	}
+	userPrompt := b.String()
+
+	runID, _ := h.S.StartRun(sql.NullInt64{}, sql.NullInt64{}, "cluster", userPrompt)
+	res, err := h.LLM.CompleteStream(ctx, llm.ModelProKey, systemClustererPrompt, userPrompt,
+		func(chunk string) { writeSSE(w, flusher, "delta", chunk) })
+	if err != nil {
+		_ = h.S.FinishRun(runID, "failed", "", err.Error(), 0, 0)
+		writeSSE(w, flusher, "error", "cluster failed: "+err.Error())
+		return
+	}
+	_ = h.S.FinishRun(runID, "ok", res.Text, "", res.TokensIn, res.TokensOut)
+
+	parsed, parseErr := parseClustererJSON(res.Text)
+	if parseErr != nil {
+		writeSSE(w, flusher, "error", "parse failed: "+parseErr.Error())
+		return
+	}
+	if err := h.S.ReplaceClusterData(parsed.clusters, parsed.links); err != nil {
+		writeSSE(w, flusher, "error", "store failed: "+err.Error())
+		return
+	}
+	writeSSE(w, flusher, "end", "ok")
+}
+
+func (h *Handler) boardSynthesize(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method", 405)
+		return
+	}
+	aID, err1 := strconv.ParseInt(r.FormValue("a"), 10, 64)
+	bID, err2 := strconv.ParseInt(r.FormValue("b"), 10, 64)
+	if err1 != nil || err2 != nil || aID == bID {
+		http.Error(w, "need two distinct idea ids", 400)
+		return
+	}
+	a, err := h.S.GetIdea(aID)
+	if err != nil {
+		http.Error(w, "idea a not found", 404)
+		return
+	}
+	b, err := h.S.GetIdea(bID)
+	if err != nil {
+		http.Error(w, "idea b not found", 404)
+		return
+	}
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming unsupported", 500)
+		return
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("X-Accel-Buffering", "no")
+	w.WriteHeader(200)
+
+	pid, err := h.S.CreateProject(store.Project{
+		Title:   a.Title + " × " + b.Title,
+		Summary: "synthesis of ideas #" + strconv.FormatInt(a.ID, 10) + " and #" + strconv.FormatInt(b.ID, 10),
+	})
+	if err != nil {
+		writeSSE(w, flusher, "error", "create project: "+err.Error())
+		return
+	}
+	writeSSE(w, flusher, "project", strconv.FormatInt(pid, 10))
+
+	ctx, cancel := context.WithTimeout(r.Context(), 180*time.Second)
+	defer cancel()
+	userPrompt := fmt.Sprintf(
+		"Two ideas have been selected for synthesis. Produce a single design doc that combines them — the goal is to find the unified project that subsumes both, not to merge them mechanically.\n\nIdea A (#%d): %s\n%s\n\nIdea B (#%d): %s\n%s",
+		a.ID, a.Title, a.Body, b.ID, b.Title, b.Body,
+	)
+	runID, _ := h.S.StartRun(sql.NullInt64{}, sql.NullInt64{Int64: pid, Valid: true}, "synthesize", userPrompt)
+	res, err := h.LLM.CompleteStream(ctx, llm.ModelProKey, systemDesignDocPrompt, userPrompt,
+		func(chunk string) { writeSSE(w, flusher, "delta", chunk) })
+	if err != nil {
+		_ = h.S.FinishRun(runID, "failed", "", err.Error(), 0, 0)
+		writeSSE(w, flusher, "error", "synth failed: "+err.Error())
+		return
+	}
+	_ = h.S.FinishRun(runID, "ok", res.Text, "", res.TokensIn, res.TokensOut)
+	_ = h.S.UpdateProjectDoc(pid, res.Text)
+	writeSSE(w, flusher, "end", string(web.RenderMarkdown(res.Text)))
+}
+
+type clustererResult struct {
+	clusters []struct {
+		Label   string
+		IdeaIDs []int64
+	}
+	links []store.IdeaLink
+}
+
+func parseClustererJSON(text string) (*clustererResult, error) {
+	// extract the first fenced ```json block, else first balanced {...}
+	raw := extractFencedJSON(text)
+	if raw == "" {
+		raw = extractFirstObject(text)
+	}
+	if raw == "" {
+		return nil, fmt.Errorf("no JSON block found")
+	}
+	var parsed struct {
+		Clusters []struct {
+			Label   string  `json:"label"`
+			IdeaIDs []int64 `json:"idea_ids"`
+		} `json:"clusters"`
+		Edges []struct {
+			A      int64   `json:"a"`
+			B      int64   `json:"b"`
+			Weight float64 `json:"weight"`
+			Reason string  `json:"reason"`
+		} `json:"edges"`
+	}
+	if err := json.Unmarshal([]byte(raw), &parsed); err != nil {
+		return nil, err
+	}
+	out := &clustererResult{}
+	for _, c := range parsed.Clusters {
+		out.clusters = append(out.clusters, struct {
+			Label   string
+			IdeaIDs []int64
+		}{Label: c.Label, IdeaIDs: c.IdeaIDs})
+	}
+	for _, e := range parsed.Edges {
+		out.links = append(out.links, store.IdeaLink{A: e.A, B: e.B, Weight: e.Weight, Reason: e.Reason})
+	}
+	return out, nil
+}
+
+func extractFencedJSON(text string) string {
+	const open = "```json"
+	i := strings.Index(text, open)
+	if i < 0 {
+		return ""
+	}
+	rest := text[i+len(open):]
+	if j := strings.Index(rest, "```"); j >= 0 {
+		return strings.TrimSpace(rest[:j])
+	}
+	return ""
+}
+
+func extractFirstObject(text string) string {
+	start := strings.IndexByte(text, '{')
+	if start < 0 {
+		return ""
+	}
+	depth := 0
+	inStr := false
+	esc := false
+	for i := start; i < len(text); i++ {
+		ch := text[i]
+		if inStr {
+			if esc {
+				esc = false
+			} else if ch == '\\' {
+				esc = true
+			} else if ch == '"' {
+				inStr = false
+			}
+			continue
+		}
+		switch ch {
+		case '"':
+			inStr = true
+		case '{':
+			depth++
+		case '}':
+			depth--
+			if depth == 0 {
+				return text[start : i+1]
+			}
+		}
+	}
+	return ""
+}
+
 // ---- inbox ----
 
 func (h *Handler) inbox(w http.ResponseWriter, r *http.Request) {
@@ -784,3 +1055,31 @@ Numbered list. 3-6 honest "I don't know" questions the author should resolve bef
 Bulleted list (use '-'). Each line: a concrete thing to read or watch — paper title, blog post, talk, RFC, source-code module — followed by a 5-15 word reason. Prefer foundational references over recency. 4-10 items. One per line, no nested sub-bullets.
 
 Do not invent URLs you don't know exist. If you don't know a canonical reference, describe what to search for instead (e.g. "Original Raft paper by Ongaro & Ousterhout").`
+
+const systemClustererPrompt = `You are clustering a user's open ideas to surface hidden adjacencies.
+
+You will receive a list of ideas with numeric ids, titles, and short bodies. Produce:
+
+1. A brief paragraph (1-3 sentences) about what jumped out — themes, surprising adjacencies, the riskiest cluster. This is for the user to read; keep it human and specific to the actual ideas given.
+
+2. Then a single fenced JSON block (triple-backticks with json tag) with this shape:
+
+` + "```" + `json
+{
+  "clusters": [
+    {"label": "short 2-4 word theme", "idea_ids": [1, 3, 7]}
+  ],
+  "edges": [
+    {"a": 1, "b": 3, "weight": 0.72, "reason": "short clause, no period"}
+  ]
+}
+` + "```" + `
+
+Rules:
+- every idea id from the input MUST appear in exactly one cluster
+- create as few clusters as the ideas honestly support (often 2-5); a singleton cluster is fine if an idea is truly orphan
+- edges only between idea pairs with meaningful adjacency (weight ≥ 0.3); skip weak ones; symmetric (don't include both a→b and b→a)
+- weight is a float in [0, 1]
+- ids must be integers exactly as provided in the input
+
+Output nothing else after the JSON block.`

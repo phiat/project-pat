@@ -508,6 +508,144 @@ func (s *Store) UpdateBriefItemNote(id int64, note string) error {
 	return err
 }
 
+// Idea board (clusters + links)
+
+type Cluster struct {
+	ID    int64
+	Label string
+}
+
+type IdeaLink struct {
+	A      int64
+	B      int64
+	Weight float64
+	Reason string
+}
+
+type BoardIdea struct {
+	ID        int64
+	Title     string
+	Body      string
+	ClusterID sql.NullInt64
+}
+
+// ReplaceClusterData wipes prior cluster + link snapshots and writes the
+// supplied clustering atomically.
+func (s *Store) ReplaceClusterData(clusters []struct {
+	Label   string
+	IdeaIDs []int64
+}, links []IdeaLink) error {
+	tx, err := s.DB.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`DELETE FROM idea_cluster_members`); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM idea_clusters`); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM idea_links`); err != nil {
+		return err
+	}
+	cstmt, err := tx.Prepare(`INSERT INTO idea_clusters(label, position) VALUES(?,?)`)
+	if err != nil {
+		return err
+	}
+	defer cstmt.Close()
+	mstmt, err := tx.Prepare(`INSERT INTO idea_cluster_members(cluster_id, idea_id) VALUES(?,?)`)
+	if err != nil {
+		return err
+	}
+	defer mstmt.Close()
+	for i, c := range clusters {
+		res, err := cstmt.Exec(c.Label, i)
+		if err != nil {
+			return err
+		}
+		cid, _ := res.LastInsertId()
+		for _, ideaID := range c.IdeaIDs {
+			if _, err := mstmt.Exec(cid, ideaID); err != nil {
+				return err
+			}
+		}
+	}
+	lstmt, err := tx.Prepare(`INSERT OR REPLACE INTO idea_links(idea_a, idea_b, weight, reason) VALUES(?,?,?,?)`)
+	if err != nil {
+		return err
+	}
+	defer lstmt.Close()
+	for _, l := range links {
+		a, b := l.A, l.B
+		if a > b {
+			a, b = b, a
+		}
+		if a == b {
+			continue
+		}
+		if _, err := lstmt.Exec(a, b, l.Weight, l.Reason); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+func (s *Store) ListClusters() ([]Cluster, error) {
+	rows, err := s.DB.Query(`SELECT id, label FROM idea_clusters ORDER BY position`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Cluster
+	for rows.Next() {
+		var c Cluster
+		if err := rows.Scan(&c.ID, &c.Label); err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) ListBoardIdeas() ([]BoardIdea, error) {
+	rows, err := s.DB.Query(`
+        SELECT i.id, i.title, i.body, m.cluster_id
+        FROM ideas i
+        LEFT JOIN idea_cluster_members m ON m.idea_id = i.id
+        ORDER BY i.id ASC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []BoardIdea
+	for rows.Next() {
+		var b BoardIdea
+		if err := rows.Scan(&b.ID, &b.Title, &b.Body, &b.ClusterID); err != nil {
+			return nil, err
+		}
+		out = append(out, b)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) ListIdeaLinks() ([]IdeaLink, error) {
+	rows, err := s.DB.Query(`SELECT idea_a, idea_b, weight, reason FROM idea_links`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []IdeaLink
+	for rows.Next() {
+		var l IdeaLink
+		if err := rows.Scan(&l.A, &l.B, &l.Weight, &l.Reason); err != nil {
+			return nil, err
+		}
+		out = append(out, l)
+	}
+	return out, rows.Err()
+}
+
 // PreviousRunOutput returns the output of the most recent prior successful
 // run by the same agent, or "" if none. Used for inbox diff.
 func (s *Store) PreviousRunOutput(agentID, beforeRunID int64) (string, error) {

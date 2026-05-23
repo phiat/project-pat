@@ -66,6 +66,7 @@ Model names default to `deepseek-v4-flash` / `deepseek-v4-pro`. If your account 
   - **standing orders** — agents scoped to this project; their prompt is auto-templated with the live design doc on every run
   - **timeline** — recent runs touching the project (any trigger)
 - **`/agents`** — define cron-scheduled missions globally (or scope them via standing orders on a project). "run now" fires off-thread.
+- **`/board`** — your idea constellation. Click *cluster ideas* and a pro agent groups them into themes and emits weighted edges; the view renders as a 2D force-directed graph over the landscape. Click two nodes to select them and hit *synthesize* — pro writes a unified design doc for the combined project and you land on it.
 - **`/inbox`** — agent reports (cron + manual) land here with unread badges, star, and a unified-style line diff vs the previous successful run by the same agent. Opening an item marks it read.
 - **`/runs`** — full LLM run log with token usage, errors, and expandable rendered output.
 
@@ -76,7 +77,5 @@ All LLM endpoints stream over SSE; the UI shows tokens arriving in real-time, th
 - materialize project artifacts to `workspace/<slug>/` on disk.
 - multi-agent project teams (planner → critic → drafter chain across multiple system prompts).
 - prototype generation tier: scaffold a runnable repo per project.
-- prompt-library versioning for agents (history + diff + test-against-prior-runs).
-- idea cluster board (force-directed three.js graph).
 - reconciliation pass for research briefs (reread the brief against the user's per-item notes).
 - scheduler reload via in-process notify rather than the 30-second poll.
