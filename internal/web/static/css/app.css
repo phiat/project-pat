@@ -1,4 +1,7 @@
 :root {
+  /* default = dark theme. data-theme="light" on <html> swaps the values
+     below; see further down. Contrasts here all clear WCAG AA on the
+     dark bg (snow/platinum 15:1, sage on bg ~5.3:1, beige ~9:1). */
   --c-bg: #143109;
   --c-bg-2: #0d2208;
   --c-sage: #aaae7f;
@@ -10,9 +13,51 @@
   --c-panel: rgba(13, 34, 8, 0.62);
   --c-panel-2: rgba(13, 34, 8, 0.82);
   --c-err: #d97a6a;
+  --c-diff-add-bg: rgba(170, 174, 127, 0.10);
+  --c-diff-add-tok: rgba(170, 174, 127, 0.28);
+  --c-diff-del-bg: rgba(217, 122, 106, 0.10);
+  --c-diff-del-tok: rgba(217, 122, 106, 0.22);
+  /* Translucent surface tints used by topbar/panels/tables. In light
+     mode these flip to whites so they tint the cream bg up, not down. */
+  --c-tint-1: rgba(13, 34, 8, 0.35);
+  --c-tint-2: rgba(13, 34, 8, 0.40);
+  --c-tint-3: rgba(13, 34, 8, 0.45);
+  --c-tint-4: rgba(13, 34, 8, 0.50);
+  --c-tint-5: rgba(13, 34, 8, 0.60);
   --r: 10px;
   --fs-body: 14px;
 }
+
+/* Light theme. Body text 14:1, muted ~6:1, blue ~7:1, err ~6:1 — all
+   AA-safe on the cream bg. The 3D background is hidden in light mode
+   (see #bg-canvas / .scrim rules) and background.js short-circuits
+   its tick loop so the GPU stays idle. */
+[data-theme="light"] {
+  --c-bg: #f6f3e8;
+  --c-bg-2: #ecebdf;
+  --c-sage: #5b5d44;          /* darkened sage — readable on cream */
+  --c-beige: #4a4530;         /* darkened beige for secondary headers */
+  --c-blue: #2d4880;          /* deeper baltic */
+  --c-snow: #0a1505;          /* "high-contrast text" inverts to near-black */
+  --c-platinum: #1a2a13;      /* body text */
+  --c-border: rgba(20, 49, 9, 0.18);
+  --c-panel: rgba(255, 255, 255, 0.62);
+  --c-panel-2: rgba(255, 255, 255, 0.82);
+  --c-err: #a83c2e;
+  --c-diff-add-bg: rgba(91, 93, 68, 0.10);
+  --c-diff-add-tok: rgba(91, 93, 68, 0.28);
+  --c-diff-del-bg: rgba(168, 60, 46, 0.12);
+  --c-diff-del-tok: rgba(168, 60, 46, 0.24);
+  --c-tint-1: rgba(255, 255, 255, 0.45);
+  --c-tint-2: rgba(255, 255, 255, 0.55);
+  --c-tint-3: rgba(255, 255, 255, 0.65);
+  --c-tint-4: rgba(255, 255, 255, 0.72);
+  --c-tint-5: rgba(255, 255, 255, 0.82);
+}
+
+html { transition: background-color 0.25s ease, color 0.25s ease; }
+[data-theme="light"] #bg-canvas { display: none; }
+[data-theme="light"] .scrim { display: none; }
 
 * { box-sizing: border-box; }
 
@@ -60,7 +105,7 @@ a:hover { color: var(--c-beige); }
   padding: 14px 28px;
   border-bottom: 1px solid var(--c-border);
   backdrop-filter: blur(6px);
-  background: rgba(13, 34, 8, 0.35);
+  background: var(--c-tint-1);
 }
 .brand { display: flex; align-items: center; gap: 10px; font-weight: 600; }
 .brand-mark { color: var(--c-blue); font-size: 18px; line-height: 1; }
@@ -68,7 +113,31 @@ a:hover { color: var(--c-beige); }
 .nav { display: flex; gap: 18px; }
 .nav a { color: var(--c-beige); font-size: 13px; letter-spacing: 0.3px; }
 .nav a:hover { color: var(--c-snow); }
-.topbar-right { margin-left: auto; }
+.topbar-right { margin-left: auto; display: flex; align-items: center; gap: 12px; }
+
+.theme-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  background: transparent;
+  border: 1px solid var(--c-border);
+  border-radius: 6px;
+  color: var(--c-beige);
+  cursor: pointer;
+  transition: color 0.15s ease, border-color 0.15s ease, background-color 0.15s ease;
+}
+.theme-toggle:hover {
+  color: var(--c-snow);
+  border-color: var(--c-blue);
+  background: var(--c-panel);
+}
+.theme-icon { width: 14px; height: 14px; }
+.theme-icon-moon { display: none; }
+[data-theme="light"] .theme-icon-sun { display: none; }
+[data-theme="light"] .theme-icon-moon { display: inline-block; }
 .kbd {
   font-family: ui-monospace, monospace;
   font-size: 11px;
@@ -206,7 +275,7 @@ button:hover { filter: brightness(1.1); }
   padding: 12px 14px;
   border: 1px solid var(--c-border);
   border-radius: 8px;
-  background: rgba(13, 34, 8, 0.4);
+  background: var(--c-tint-2);
 }
 .row-main { flex: 1; }
 .row-title { color: var(--c-snow); font-weight: 500; }
@@ -222,7 +291,7 @@ button:hover { filter: brightness(1.1); }
   border-radius: 999px;
   border: 1px solid var(--c-border);
   color: var(--c-beige);
-  background: rgba(13, 34, 8, 0.5);
+  background: var(--c-tint-4);
 }
 .pill-active { color: var(--c-snow); border-color: var(--c-blue); background: rgba(65, 97, 156, 0.18); }
 .pill-ok     { color: var(--c-beige); border-color: var(--c-sage); }
@@ -266,7 +335,7 @@ button:hover { filter: brightness(1.1); }
   font-family: ui-monospace, "JetBrains Mono", "SF Mono", Menlo, monospace;
   font-size: 12.5px;
   line-height: 1.6;
-  background: rgba(13, 34, 8, 0.5);
+  background: var(--c-tint-4);
   border: 1px solid var(--c-border);
   border-radius: 8px;
   padding: 8px 0;
@@ -275,21 +344,21 @@ button:hover { filter: brightness(1.1); }
 .diff-line { padding: 0 12px; white-space: pre-wrap; }
 .diff-mark { display: inline-block; width: 14px; color: var(--c-sage); user-select: none; }
 .diff-same { color: var(--c-platinum); }
-.diff-add  { background: rgba(170, 174, 127, 0.10); color: var(--c-beige); }
+.diff-add  { background: var(--c-diff-add-bg); color: var(--c-beige); }
 .diff-add .diff-mark { color: var(--c-sage); }
-.diff-del  { background: rgba(217, 122, 106, 0.10); color: var(--c-err); }
+.diff-del  { background: var(--c-diff-del-bg); color: var(--c-err); }
 .diff-del .diff-mark { color: var(--c-err); }
 .diff-gap  { color: var(--c-sage); text-align: center; padding: 2px 0; }
 .diff-tok-del {
-  background: rgba(217, 122, 106, 0.22);
+  background: var(--c-diff-del-tok);
   text-decoration: line-through;
-  text-decoration-color: rgba(217, 122, 106, 0.65);
+  text-decoration-color: var(--c-err);
   padding: 0 2px;
   border-radius: 2px;
   color: var(--c-err);
 }
 .diff-tok-add {
-  background: rgba(170, 174, 127, 0.28);
+  background: var(--c-diff-add-tok);
   padding: 0 2px;
   border-radius: 2px;
   color: var(--c-snow);
@@ -368,7 +437,7 @@ button:hover { filter: brightness(1.1); }
   gap: 8px;
   padding: 6px 10px;
   border-radius: 999px;
-  background: rgba(13, 34, 8, 0.6);
+  background: var(--c-tint-5);
   border: 1px solid var(--c-border);
   color: var(--c-platinum);
   cursor: pointer;
@@ -430,7 +499,7 @@ button:hover { filter: brightness(1.1); }
   padding: 6px 8px;
   border: 1px solid var(--c-border);
   border-radius: 6px;
-  background: rgba(13, 34, 8, 0.4);
+  background: var(--c-tint-2);
   font-size: 13px;
 }
 .option label { display: flex; align-items: baseline; gap: 6px; cursor: pointer; flex-wrap: wrap; }
@@ -469,7 +538,7 @@ button:hover { filter: brightness(1.1); }
   display: block;
   width: 100%;
   height: 100%;
-  background: rgba(13, 34, 8, 0.35);
+  background: var(--c-tint-1);
 }
 .board-empty {
   position: absolute;
@@ -497,7 +566,7 @@ button:hover { filter: brightness(1.1); }
   padding: 8px 10px;
   border: 1px solid var(--c-border);
   border-radius: 8px;
-  background: rgba(13, 34, 8, 0.4);
+  background: var(--c-tint-2);
 }
 .brief-item-read .brief-text { color: var(--c-sage); text-decoration: line-through; }
 .brief-item-reading { border-color: var(--c-blue); }
@@ -577,7 +646,7 @@ button:hover { filter: brightness(1.1); }
   flex-direction: column;
   gap: 2px;
   font-size: 12px;
-  background: rgba(13, 34, 8, 0.45);
+  background: var(--c-tint-3);
   border: 1px dashed var(--c-border);
   border-radius: 8px;
   padding: 8px 10px;

@@ -226,6 +226,12 @@ window.addEventListener("resize", onResize, { passive: true });
 let lastAppliedHue = 0;
 
 function tick() {
+  // Light theme hides the canvas; skip the entire frame so we don't
+  // burn GPU cycles on an invisible scene.
+  if (document.documentElement.getAttribute("data-theme") === "light") {
+    requestAnimationFrame(tick);
+    return;
+  }
   const t = clock.getElapsedTime();
   const scroll = t * DRIFT;
   const baseStep = Math.floor(scroll / CELL);
