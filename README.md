@@ -5,22 +5,22 @@
 ![sqlite](https://img.shields.io/badge/sqlite-pure--go-003B57?logo=sqlite&logoColor=white)
 ![providers](https://img.shields.io/badge/llm-7%20providers-6f42c1)
 ![status](https://img.shields.io/badge/status-scaffolding-orange)
-![license](https://img.shields.io/badge/license-unlicensed-lightgrey)
+![license](https://img.shields.io/badge/license-MIT-blue)
 
 ![overview](docs/overview.png)
 
-a single-user workshop for ideation, periodic research, and design-doc drafting — powered by deepseek (or any OpenAI-compatible / Anthropic) agents, served as htmx-over-go.
+a single-user workshop for ideation, periodic research, and design-doc drafting — htmx-over-go with multi-provider LLM agents and a cron scheduler.
 
-> **status**: scaffolding. core flows are wired (ideas → projects → design docs, cron-scheduled agents, run log). prototype-from-doc / sandboxes / workspace materialization are stubs to fill in next.
+> **status**: scaffolding, but the loop is closed: ideas → projects → drafted/critiqued/reconciled design docs → workspace artifacts on disk → optional runnable prototype skeleton. Cron-scheduled agents and a manual run-now path feed the inbox; the workshop floor surfaces what's asking for attention.
 
 ## stack
 
-- **go 1.26** (HTTP server, html/template, stdlib mux)
-- **sqlite** (`modernc.org/sqlite` — pure-go, no cgo)
+- **go 1.26** (HTTP server, `html/template`, stdlib mux)
+- **sqlite** (`modernc.org/sqlite` — pure-go, no cgo) with single-writer connection pool
 - **htmx 2** + a small dark css (palette: black forest / dry sage / beige / baltic blue / bright snow / platinum)
-- **three.js** background (tessellated cubic landscape, plane-window vantage, slow forward drift)
-- **deepseek** chat completions (`flash` for quick drafts, `pro` for deeper passes)
-- **robfig/cron** for the agent scheduler
+- **three.js** background — tessellated cubic landscape, plane-window vantage, slow forward drift, periodic hue cycle, drifting accent lights
+- **multi-provider LLMs** — OpenAI / DeepSeek / Anthropic / OpenRouter / Ollama / Groq / Together; two tier keys (`flash` for quick drafts, `pro` for deeper passes), optional reasoning/thinking budget per tier
+- **robfig/cron** for the agent scheduler, with in-process notify so agent CRUD reschedules immediately
 
 ## layout
 
@@ -29,23 +29,29 @@ cmd/server/main.go                   wires everything
 internal/
   config/      .env loader + paths
   db/          sqlite open + migrations
-  store/       data access (ideas, projects, agents, runs, artifacts)
-  llm/         deepseek client
-  handlers/    HTTP handlers (htmx-friendly partials)
+  store/       data access (ideas, projects, agents, runs, artifacts,
+               brief items, idea clusters, idea links, stack picks)
+  llm/         provider-agnostic client + openai/anthropic drivers
+  stack/       runtime catalog (slots, options, presets, compat rules)
+  handlers/    HTTP handlers (htmx partials), workspace materializer,
+               prototype scaffolder
   scheduler/   cron loop that ticks scheduled agents
   web/
     templates.go        + templates/  (layout + page templates)
     static/css/app.css
     static/js/background.js
-workspace/        per-project workdirs (gitignored, materialized later)
+docs/             screenshots + reference material referenced by README
+workspace/        per-project workdirs (gitignored) — materialized
+                  artifacts (DESIGN.md, CRITIQUE.md, BRIEF.md, ...) and
+                  scaffolded prototypes land under workspace/<slug>/
 ```
 
 ## run it
 
 ```bash
-mise install                # pins go 1.26 via mise.toml
-mise exec -- go mod tidy
-mise exec -- go run ./cmd/server
+mise install                # installs a Go toolchain per mise.toml (or use any Go ≥ 1.26 directly)
+go mod tidy
+go run ./cmd/server
 ```
 
 Then open <http://localhost:8080>.
@@ -85,40 +91,33 @@ All non-Anthropic providers go through one OpenAI-compatible driver. Anthropic g
 
 ### Reasoning / thinking effort
 
-Each tier can request extra "thinking" from the model:
-
-| effort    | OpenAI (`reasoning_effort`) | Anthropic (`thinking.budget_tokens`) |
-|-----------|-----------------------------|---------------------------------------|
-| `off`     | _omitted_                   | _disabled_                            |
-| `minimal` | `minimal`                   | 1 024                                 |
-| `low`     | `low`                       | 4 000                                 |
-| `medium`  | `medium`                    | 12 000                                |
-| `high`    | `high`                      | 32 000                                |
-
-Drivers silently omit the parameter when a model doesn't accept it, so leaving `off` is safe across all providers. Provider-specific caveats: Anthropic forces `temperature=1.0` when thinking is enabled and auto-bumps `max_tokens` by 4 096 above the budget for the answer. OpenAI's `reasoning_effort` is only meaningful on o1/o3/gpt-5-class models.
+Per-tier knob: `off | minimal | low | medium | high`. Mapped to `reasoning_effort` on OpenAI-style providers and to `thinking.budget_tokens` on Anthropic. Silently ignored where the model doesn't accept it.
 
 ## what's wired
 
 - **`/`** — overview: counts + recent runs + streaming quick-draft form (creates an idea and seeds it via flash).
+- **`/floor`** — *the workshop floor*. One tile per project, sorted by an attention score (empty doc, critique pending, unread inbox, staleness). Each tile shows the last paragraph of the doc, the last resolved decision, and a one-button next action.
 - **`/ideas`** — capture pad; promote an idea to a project.
 - **`/projects`** — project list; create from scratch or via promote.
 - **`/projects/:id`** — the heart of the workshop. Streaming panels for:
-  - **design doc** — draft / refine via flash or pro, output renders as markdown
+  - **design doc** — draft / refine via flash or pro
+  - **team draft** — sequential planner → critic → drafter pro chain; intermediate plan + critic notes are persisted as artifacts; SSE `phase` events anchor the UI between passes
+  - **scaffold prototype** — pro emits a JSON file manifest; the server sanitises paths and writes a runnable skeleton to `workspace/<slug>/proto/`
   - **critique** — pro critic produces a scorecard + numbered weaknesses + concrete edits; "apply critique" runs a second pro pass that refines the doc against those notes
+  - **stack picker** — slot-by-slot tech-stack selector (runtime / framework / storage / deploy / …) with presets, version pins, and an incompat warning when runtime changes invalidate prior picks. Stack context is auto-injected into every project-scoped prompt
+  - **devil's office hours** — pro "devil" reads the doc + latest critique + the resolved decisions and asks one sharp committing question; you answer ≤280 chars and the answer becomes a load-bearing decision in the prompt context of every later pass
   - **research brief** — pro brief with claims, counter-claims, open questions, and a parsed reading list. Items are an interactive checklist; per-item notes persist
+  - **reconcile against notes** — once you've actually read some items, pro re-reads the brief through the lens of your per-item notes and emits a Confirmed / Complicated / New questions / Next moves reconciliation
   - **standing orders** — agents scoped to this project; their prompt is auto-templated with the live design doc on every run
   - **timeline** — recent runs touching the project (any trigger)
-- **`/agents`** — define cron-scheduled missions globally (or scope them via standing orders on a project). "run now" fires off-thread.
+  - **materialize** — one click writes the current state (design doc, critique, brief + reading-list notes, reconcile, decisions, stack) to `workspace/<slug>/` as a set of Markdown files
+- **`/agents`** — define cron-scheduled missions globally (or scope them via standing orders on a project). "run now" fires off-thread. Agent CRUD pings the scheduler in-process; new schedules are live within milliseconds, not 30 seconds.
 - **`/board`** — your idea constellation. Click *cluster ideas* and a pro agent groups them into themes and emits weighted edges; the view renders as a 2D force-directed graph over the landscape. Click two nodes to select them and hit *synthesize* — pro writes a unified design doc for the combined project and you land on it.
 - **`/inbox`** — agent reports (cron + manual) land here with unread badges, star, and a unified-style line diff vs the previous successful run by the same agent. Opening an item marks it read.
 - **`/runs`** — full LLM run log with token usage, errors, and expandable rendered output.
 
-All LLM endpoints stream over SSE; the UI shows tokens arriving in real-time, then swaps in rendered markdown when the stream ends.
+All LLM endpoints stream over SSE; the UI shows tokens arriving in real-time, then swaps in rendered markdown when the stream ends. If the client disconnects mid-stream, the partial output is preserved in the run row (`status='cancelled'`) instead of being thrown away.
 
-## next slices (not yet built)
+## license
 
-- materialize project artifacts to `workspace/<slug>/` on disk.
-- multi-agent project teams (planner → critic → drafter chain across multiple system prompts).
-- prototype generation tier: scaffold a runnable repo per project.
-- reconciliation pass for research briefs (reread the brief against the user's per-item notes).
-- scheduler reload via in-process notify rather than the 30-second poll.
+MIT — see [LICENSE](LICENSE).
