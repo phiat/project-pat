@@ -451,11 +451,17 @@ func parseID(args []string, usage string) (int64, error) {
 	return v, nil
 }
 
+// truncate clips s to n runes (not bytes) so multibyte content isn't cut
+// mid-rune into an invalid-UTF-8 glyph before the ellipsis.
 func truncate(s string, n int) string {
 	if len(s) <= n {
 		return s
 	}
-	return s[:n] + "…"
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[:n]) + "…"
 }
 
 func oneLine(s string) string {

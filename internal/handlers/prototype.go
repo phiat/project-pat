@@ -124,8 +124,8 @@ func parsePrototypeJSON(text string) ([]protoFile, error) {
 	if len(parsed.Files) == 0 {
 		return nil, fmt.Errorf("manifest has no files")
 	}
-	if len(parsed.Files) > 16 {
-		return nil, fmt.Errorf("manifest has %d files; refusing (>16)", len(parsed.Files))
+	if len(parsed.Files) > 12 {
+		return nil, fmt.Errorf("manifest has %d files; refusing (>12)", len(parsed.Files))
 	}
 	return parsed.Files, nil
 }

@@ -178,6 +178,18 @@ func (h *Handler) quickDraft(w http.ResponseWriter, r *http.Request) {
 		user:      fmt.Sprintf("Title: %s\n\nContext:\n%s", title, body),
 		timeout:   120 * time.Second,
 		preEvents: []sseEvent{{Event: "meta", Data: fmt.Sprintf("idea #%d", ideaID)}},
+		onSuccess: func(text string, runID int64) (string, string) {
+			// Fold the seeded sketch back into the idea so a reload of
+			// /ideas shows the crystallized version, not the raw input it
+			// was generated from. (The idea was just created above with the
+			// user's rough body.)
+			if strings.TrimSpace(text) != "" {
+				if err := h.S.UpdateIdeaBody(ideaID, text); err != nil {
+					log.Printf("quick-draft updateIdeaBody(%d): %v", ideaID, err)
+				}
+			}
+			return string(web.RenderMarkdown(text)), ""
+		},
 	})
 }
 
@@ -431,49 +443,7 @@ func (h *Handler) projectActions(w http.ResponseWriter, r *http.Request) {
 // ---- stack handlers ----
 
 func (h *Handler) renderStackPanel(w http.ResponseWriter, proj *store.Project) {
-	picks, _ := h.S.ListStackPicks(proj.ID)
-	runtime := runtimeOptionID(picks)
-	incompats := stack.IncompatibleSlots(prompts.ToCatalogPicks(picks), runtime)
-	incompatSet := make(map[string]bool, len(incompats))
-	for _, s := range incompats {
-		incompatSet[s] = true
-	}
-
-	chips := make([]chipData, 0, len(stack.Slots))
-	for _, s := range stack.Slots {
-		c := chipData{SlotKey: s.Key, SlotLabel: s.Label, Empty: true}
-		for _, p := range picks {
-			if p.Slot != s.Key {
-				continue
-			}
-			c.Empty = false
-			c.Version = p.Version
-			if p.OptionID != "" {
-				if o, ok := stack.OptionByID(p.OptionID); ok {
-					c.Value = o.Label
-				} else {
-					c.Value = p.OptionID
-				}
-			} else if p.FreeText != "" {
-				c.Value = p.FreeText
-			} else {
-				c.Empty = true
-			}
-			break
-		}
-		if incompatSet[s.Key] {
-			c.Incompat = true
-		}
-		chips = append(chips, c)
-	}
-
-	data := stackPanelData{
-		ProjectID: proj.ID,
-		PresetID:  proj.StackPreset,
-		Chips:     chips,
-		Incompats: incompats,
-		Presets:   stack.Presets,
-	}
+	data := h.buildStackPanelData(proj)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := h.R.RenderPartial(w, "stack_panel", data); err != nil {
 		log.Printf("render stack_panel: %v", err)
@@ -651,7 +621,10 @@ func (h *Handler) buildStackPanelData(proj *store.Project) stackPanelData {
 				}
 			} else if p.FreeText != "" {
 				c.Value = p.FreeText
-			} else {
+			} else if p.Version == "" {
+				// no option, no free text, no version → genuinely empty.
+				// A version-only pick stays non-empty so the chip (and its
+				// version pin) still renders.
 				c.Empty = true
 			}
 			break
@@ -1153,20 +1126,22 @@ func (h *Handler) streamSSE(w http.ResponseWriter, r *http.Request, spec streamS
 	})
 	if err != nil {
 		status := "failed"
-		// If the request context died (tab close, network drop) we still
-		// want to keep whatever streamed so far rather than lose it.
-		// Drivers wrap the transport error, so check both the request
-		// context AND the returned error for cancellation/deadline.
-		canceled := r.Context().Err() != nil ||
-			errors.Is(err, context.Canceled) ||
-			errors.Is(err, context.DeadlineExceeded)
+		// Only a *client* disconnect (tab close, network drop) counts as a
+		// cancellation worth preserving the partial under. That surfaces as
+		// the request context being cancelled. Our own spec.timeout firing
+		// is context.DeadlineExceeded on the child ctx — that's a genuine
+		// failure (slow/hung model), so it stays "failed" even though we
+		// still persist whatever streamed.
+		canceled := r.Context().Err() != nil || errors.Is(err, context.Canceled)
 		if canceled && partial.Len() > 0 {
 			status = "cancelled"
 		}
 		if fErr := h.S.FinishRun(runID, status, partial.String(), err.Error(), 0, 0); fErr != nil {
 			log.Printf("finishRun(%d): %v", runID, fErr)
 		}
-		writeSSE(w, flusher, "error", spec.trigger+" failed: "+err.Error())
+		// emit (not raw writeSSE) so this can't race the heartbeat goroutine,
+		// which is still ticking until the deferred close(hbStop) on return.
+		emit("error", spec.trigger+" failed: "+err.Error())
 		return
 	}
 	if fErr := h.S.FinishRun(runID, "ok", res.Text, "", res.TokensIn, res.TokensOut); fErr != nil {
@@ -1176,12 +1151,12 @@ func (h *Handler) streamSSE(w http.ResponseWriter, r *http.Request, spec streamS
 	if spec.onSuccess != nil {
 		endPayload, errMsg := spec.onSuccess(res.Text, runID)
 		if errMsg != "" {
-			writeSSE(w, flusher, "error", errMsg)
+			emit("error", errMsg)
 			return
 		}
-		writeSSE(w, flusher, "end", endPayload)
+		emit("end", endPayload)
 	} else {
-		writeSSE(w, flusher, "end", string(web.RenderMarkdown(res.Text)))
+		emit("end", string(web.RenderMarkdown(res.Text)))
 	}
 }
 
@@ -1209,6 +1184,38 @@ func (h *Handler) streamTeamDraft(w http.ResponseWriter, r *http.Request, proj *
 	ctx, cancel := context.WithTimeout(r.Context(), 8*time.Minute)
 	defer cancel()
 
+	// Serialise every write — the heartbeat goroutine below and the phase /
+	// delta writes both touch the ResponseWriter, which is not safe for
+	// concurrent use.
+	var sseMu sync.Mutex
+	emit := func(event, data string) {
+		sseMu.Lock()
+		defer sseMu.Unlock()
+		writeSSE(w, flusher, event, data)
+	}
+	// Keepalive every 10s. The three sequential pro passes here are the
+	// longest-thinking path in the app; without keepalives an intermediate
+	// proxy or the client can give up during a silent thinking phase.
+	hbStop := make(chan struct{})
+	defer close(hbStop)
+	go func() {
+		t := time.NewTicker(10 * time.Second)
+		defer t.Stop()
+		for {
+			select {
+			case <-hbStop:
+				return
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				sseMu.Lock()
+				fmt.Fprint(w, ": keepalive\n\n")
+				flusher.Flush()
+				sseMu.Unlock()
+			}
+		}
+	}()
+
 	stackCtx := h.stackContext(proj.ID)
 	decCtx := h.decisionsContext(proj.ID)
 	baseCtx := stackCtx + decCtx + fmt.Sprintf("Project: %s\nSummary: %s\n\nExisting doc (may be empty):\n%s\n",
@@ -1217,7 +1224,7 @@ func (h *Handler) streamTeamDraft(w http.ResponseWriter, r *http.Request, proj *
 	totalIn, totalOut := 0, 0
 	abort := func(phase string, err error, accum string) {
 		// Persist whatever the in-flight phase managed to stream and bail.
-		writeSSE(w, flusher, "error", phase+": "+err.Error())
+		emit("error", phase+": "+err.Error())
 		status := "failed"
 		if r.Context().Err() != nil && accum != "" {
 			status = "cancelled"
@@ -1226,13 +1233,13 @@ func (h *Handler) streamTeamDraft(w http.ResponseWriter, r *http.Request, proj *
 	}
 
 	// Phase 1: planner
-	writeSSE(w, flusher, "phase", "planner")
+	emit("phase", "planner")
 	var plan strings.Builder
 	plannerRes, err := h.LLM.CompleteStream(ctx, llm.ModelProKey, systemTeamPlannerPrompt,
 		baseCtx+"\nProduce a structured plan as instructed.",
 		llm.StreamHandler{
-			OnContent:   func(c string) { plan.WriteString(c); writeSSE(w, flusher, "delta", c) },
-			OnReasoning: func(c string) { writeSSE(w, flusher, "reasoning", c) },
+			OnContent:   func(c string) { plan.WriteString(c); emit("delta", c) },
+			OnReasoning: func(c string) { emit("reasoning", c) },
 		})
 	if err != nil {
 		abort("planner", err, plan.String())
@@ -1245,13 +1252,13 @@ func (h *Handler) streamTeamDraft(w http.ResponseWriter, r *http.Request, proj *
 	}
 
 	// Phase 2: critic
-	writeSSE(w, flusher, "phase", "critic")
+	emit("phase", "critic")
 	var crit strings.Builder
 	criticUser := baseCtx + fmt.Sprintf("\nPlan to critique:\n\n%s\n", plannerRes.Text)
 	criticRes, err := h.LLM.CompleteStream(ctx, llm.ModelProKey, systemTeamCriticPrompt, criticUser,
 		llm.StreamHandler{
-			OnContent:   func(c string) { crit.WriteString(c); writeSSE(w, flusher, "delta", c) },
-			OnReasoning: func(c string) { writeSSE(w, flusher, "reasoning", c) },
+			OnContent:   func(c string) { crit.WriteString(c); emit("delta", c) },
+			OnReasoning: func(c string) { emit("reasoning", c) },
 		})
 	if err != nil {
 		abort("critic", err, crit.String())
@@ -1264,14 +1271,14 @@ func (h *Handler) streamTeamDraft(w http.ResponseWriter, r *http.Request, proj *
 	}
 
 	// Phase 3: drafter
-	writeSSE(w, flusher, "phase", "drafter")
+	emit("phase", "drafter")
 	var draft strings.Builder
 	drafterUser := baseCtx + fmt.Sprintf("\nPlanner output:\n\n%s\n\nCritic notes on the plan:\n\n%s\n\nProduce the final design doc that resolves the critic's notes and follows the agreed plan.",
 		plannerRes.Text, criticRes.Text)
 	drafterRes, err := h.LLM.CompleteStream(ctx, llm.ModelProKey, systemDesignDocPrompt, drafterUser,
 		llm.StreamHandler{
-			OnContent:   func(c string) { draft.WriteString(c); writeSSE(w, flusher, "delta", c) },
-			OnReasoning: func(c string) { writeSSE(w, flusher, "reasoning", c) },
+			OnContent:   func(c string) { draft.WriteString(c); emit("delta", c) },
+			OnReasoning: func(c string) { emit("reasoning", c) },
 		})
 	if err != nil {
 		abort("drafter", err, draft.String())
@@ -1286,7 +1293,7 @@ func (h *Handler) streamTeamDraft(w http.ResponseWriter, r *http.Request, proj *
 	if e := h.S.FinishRun(runID, "ok", drafterRes.Text, "", totalIn, totalOut); e != nil {
 		log.Printf("team-draft finishRun: %v", e)
 	}
-	writeSSE(w, flusher, "end", string(web.RenderMarkdown(drafterRes.Text)))
+	emit("end", string(web.RenderMarkdown(drafterRes.Text)))
 }
 
 // ---- agents ----
@@ -1700,7 +1707,9 @@ func computeAttention(p store.Project, t floorTile, now time.Time) float64 {
 	switch p.Status {
 	case "drafting":
 		score += 2
-	case "shipped", "archived", "done":
+	case "shipped", "done":
+		// archival is tracked by archived_at (and the floor already excludes
+		// archived projects), so it isn't a status value here.
 		score -= 15
 	}
 	return score
@@ -1741,10 +1750,7 @@ func lastParagraph(doc string, limit int) string {
 			continue
 		}
 		candidate = strings.ReplaceAll(candidate, "\n", " ")
-		if len(candidate) > limit {
-			candidate = candidate[:limit] + "…"
-		}
-		return candidate
+		return truncate(candidate, limit)
 	}
 	return ""
 }
@@ -1890,17 +1896,20 @@ func firstLineSummary(s string, n int) string {
 	if i := strings.IndexByte(s, '\n'); i >= 0 {
 		s = s[:i]
 	}
-	if len(s) > n {
-		s = s[:n] + "…"
-	}
-	return s
+	return truncate(s, n)
 }
 
+// truncate clips s to n runes (not bytes) so multibyte content — CJK,
+// emoji — never gets cut mid-rune into an invalid-UTF-8 glyph before "…".
 func truncate(s string, n int) string {
-	if len(s) <= n {
+	if len(s) <= n { // byte len ≤ n ⇒ rune count ≤ n; cheap fast path
 		return s
 	}
-	return s[:n] + "…"
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[:n]) + "…"
 }
 
 const systemSeedPrompt = `You are an idea-seeding assistant. Given a rough title and optional context, output a tight Markdown sketch with: (1) one-line crystallized framing, (2) why now / who cares, (3) 3-5 angles to explore, (4) the smallest possible first slice. Keep it under 250 words.`

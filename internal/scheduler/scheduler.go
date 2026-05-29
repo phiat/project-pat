@@ -162,8 +162,12 @@ func firstLine(s string, n int) string {
 	if i := strings.IndexByte(s, '\n'); i >= 0 {
 		s = s[:i]
 	}
-	if len(s) > n {
-		s = s[:n] + "…"
+	if len(s) <= n {
+		return s
 	}
-	return s
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[:n]) + "…"
 }

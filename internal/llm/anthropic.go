@@ -101,17 +101,21 @@ type anthropicThinking struct {
 // When thinking is enabled, Anthropic requires max_tokens > budget_tokens
 // and temperature must be 1.0 (so we just omit it).
 func (d *anthropicDriver) buildReq(modelKey, system, user string, stream bool) anthropicReq {
+	// answerTokens is the headroom reserved for the visible answer. Anthropic
+	// truncates output at max_tokens, so a too-low cap silently cuts long
+	// outputs (e.g. the prototype scaffolder's multi-file JSON manifest).
+	const answerTokens = 8192
 	req := anthropicReq{
 		Model:     d.modelFor(modelKey),
 		System:    system,
 		Messages:  []anthropicMsg{{Role: "user", Content: user}},
-		MaxTokens: 4096,
+		MaxTokens: answerTokens,
 		Stream:    stream,
 	}
 	if budget := anthropicThinkingBudget(d.reasoningFor(modelKey)); budget > 0 {
 		req.Thinking = &anthropicThinking{Type: "enabled", BudgetTokens: budget}
-		// headroom for the answer on top of thinking
-		req.MaxTokens = budget + 4096
+		// headroom for the answer on top of the thinking budget
+		req.MaxTokens = budget + answerTokens
 	}
 	return req
 }

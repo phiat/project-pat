@@ -88,6 +88,13 @@ func (s *Store) ListIdeas() ([]Idea, error) {
 	return out, rows.Err()
 }
 
+// UpdateIdeaBody replaces an idea's body — used by the quick-draft flow to
+// fold the freshly-seeded sketch back into the idea it was generated from.
+func (s *Store) UpdateIdeaBody(id int64, body string) error {
+	_, err := s.DB.Exec(`UPDATE ideas SET body=? WHERE id=?`, body, id)
+	return err
+}
+
 func (s *Store) GetIdea(id int64) (*Idea, error) {
 	row := s.DB.QueryRow(`SELECT id, title, body, status, created_at FROM ideas WHERE id=?`, id)
 	var i Idea
@@ -674,6 +681,30 @@ func (s *Store) ReplaceClusterData(clusters []struct {
 	if _, err := tx.Exec(`DELETE FROM idea_links`); err != nil {
 		return err
 	}
+	// Collect the set of real idea ids up front. The clusterer is an LLM
+	// and occasionally references an id that isn't in the input; with
+	// foreign_keys ON, a single bad id in a membership or edge would fail
+	// its INSERT and roll back the entire snapshot. Filtering here keeps
+	// one hallucinated id from discarding an otherwise-good clustering.
+	valid := make(map[int64]bool)
+	vrows, err := tx.Query(`SELECT id FROM ideas`)
+	if err != nil {
+		return err
+	}
+	for vrows.Next() {
+		var id int64
+		if err := vrows.Scan(&id); err != nil {
+			vrows.Close()
+			return err
+		}
+		valid[id] = true
+	}
+	if err := vrows.Err(); err != nil {
+		vrows.Close()
+		return err
+	}
+	vrows.Close()
+
 	cstmt, err := tx.Prepare(`INSERT INTO idea_clusters(label, position) VALUES(?,?)`)
 	if err != nil {
 		return err
@@ -684,6 +715,10 @@ func (s *Store) ReplaceClusterData(clusters []struct {
 		return err
 	}
 	defer mstmt.Close()
+	// An idea must land in at most one cluster (the prompt asks for exactly
+	// one, but nothing enforces it); a duplicate membership would render the
+	// idea twice on the board. assigned tracks ids already placed.
+	assigned := make(map[int64]bool)
 	for i, c := range clusters {
 		res, err := cstmt.Exec(c.Label, i)
 		if err != nil {
@@ -691,9 +726,13 @@ func (s *Store) ReplaceClusterData(clusters []struct {
 		}
 		cid, _ := res.LastInsertId()
 		for _, ideaID := range c.IdeaIDs {
+			if !valid[ideaID] || assigned[ideaID] {
+				continue
+			}
 			if _, err := mstmt.Exec(cid, ideaID); err != nil {
 				return err
 			}
+			assigned[ideaID] = true
 		}
 	}
 	lstmt, err := tx.Prepare(`INSERT OR REPLACE INTO idea_links(idea_a, idea_b, weight, reason) VALUES(?,?,?,?)`)
@@ -706,7 +745,7 @@ func (s *Store) ReplaceClusterData(clusters []struct {
 		if a > b {
 			a, b = b, a
 		}
-		if a == b {
+		if a == b || !valid[a] || !valid[b] {
 			continue
 		}
 		if _, err := lstmt.Exec(a, b, l.Weight, l.Reason); err != nil {

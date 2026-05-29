@@ -455,6 +455,48 @@ func TestReplaceClusterDataNormalisesAB(t *testing.T) {
 	}
 }
 
+func TestReplaceClusterDataFiltersUnknownIDs(t *testing.T) {
+	s := newTestStore(t)
+	for i := 0; i < 2; i++ {
+		_, _ = s.CreateIdea("i", "")
+	}
+	// The LLM clusterer occasionally hallucinates ids not in the input.
+	// Membership 99 and the edge touching 99 must be skipped rather than
+	// failing the FK constraint and rolling back the whole snapshot.
+	clusters := []struct {
+		Label   string
+		IdeaIDs []int64
+	}{
+		{Label: "alpha", IdeaIDs: []int64{1, 2, 99}},
+		// Idea 1 again in a second cluster — must not duplicate it.
+		{Label: "beta", IdeaIDs: []int64{1}},
+	}
+	links := []IdeaLink{
+		{A: 1, B: 2, Weight: 0.6, Reason: "real"},
+		{A: 1, B: 99, Weight: 0.9, Reason: "hallucinated"},
+	}
+	if err := s.ReplaceClusterData(clusters, links); err != nil {
+		t.Fatalf("ReplaceClusterData should not fail on unknown ids: %v", err)
+	}
+	gotLinks, _ := s.ListIdeaLinks()
+	if len(gotLinks) != 1 {
+		t.Errorf("expected 1 link (hallucinated dropped), got %d: %+v", len(gotLinks), gotLinks)
+	}
+	// Each real idea must appear in at most one cluster.
+	ideas, _ := s.ListBoardIdeas()
+	seen := map[int64]int{}
+	for _, bi := range ideas {
+		if bi.ClusterID.Valid {
+			seen[bi.ID]++
+		}
+	}
+	for id, n := range seen {
+		if n > 1 {
+			t.Errorf("idea %d assigned to %d clusters, want ≤1", id, n)
+		}
+	}
+}
+
 func TestSlugify(t *testing.T) {
 	cases := []struct{ in, want string }{
 		{"Simple Title", "simple-title"},

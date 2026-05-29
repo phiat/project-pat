@@ -31,10 +31,19 @@ type Config struct {
 func Load() (*Config, error) {
 	loadDotenv(".env")
 
+	provider := getenvDefault("LLM_PROVIDER", inferProvider())
+	// LLM_BASE_URL always wins. The legacy DEEPSEEK_BASE_URL is only honoured
+	// when the active provider is deepseek — otherwise a stale DEEPSEEK_BASE_URL
+	// in the environment would silently redirect, say, an openai run.
+	baseURL := os.Getenv("LLM_BASE_URL")
+	if baseURL == "" && strings.EqualFold(provider, "deepseek") {
+		baseURL = os.Getenv("DEEPSEEK_BASE_URL")
+	}
+
 	cfg := &Config{
-		LLMProvider:       getenvDefault("LLM_PROVIDER", inferProvider()),
+		LLMProvider:       provider,
 		LLMAPIKey:         firstNonEmpty("LLM_API_KEY", "DEEPSEEK_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY"),
-		LLMBaseURL:        firstNonEmpty("LLM_BASE_URL", "DEEPSEEK_BASE_URL"),
+		LLMBaseURL:        baseURL,
 		LLMModelFlash:     firstNonEmpty("LLM_MODEL_FLASH", "DEEPSEEK_MODEL_FLASH"),
 		LLMModelPro:       firstNonEmpty("LLM_MODEL_PRO", "DEEPSEEK_MODEL_PRO"),
 		LLMReasoningFlash: normalizeEffort(getenvDefault("LLM_REASONING_FLASH", "off")),
