@@ -64,13 +64,13 @@ type Opts struct {
 
 // New returns a Client for the given provider. Recognised provider keys:
 //
-//   openai      — any OpenAI-compatible /v1/chat/completions endpoint
-//   deepseek    — alias for openai with the DeepSeek default base URL
-//   openrouter  — alias for openai with the OpenRouter default base URL
-//   ollama      — alias for openai with the local Ollama default base URL
-//   groq        — alias for openai with the Groq default base URL
-//   together    — alias for openai with the Together default base URL
-//   anthropic   — Anthropic /v1/messages
+//	openai      — any OpenAI-compatible /v1/chat/completions endpoint
+//	deepseek    — alias for openai with the DeepSeek default base URL
+//	openrouter  — alias for openai with the OpenRouter default base URL
+//	ollama      — alias for openai with the local Ollama default base URL
+//	groq        — alias for openai with the Groq default base URL
+//	together    — alias for openai with the Together default base URL
+//	anthropic   — Anthropic /v1/messages
 //
 // An empty provider defaults to "openai".
 func New(opts Opts) (*Client, error) {

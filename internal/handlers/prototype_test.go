@@ -7,27 +7,27 @@ import (
 
 func TestSanitizeRelPath(t *testing.T) {
 	cases := []struct {
-		name  string
-		in    string
-		wantP string
+		name   string
+		in     string
+		wantP  string
 		wantOK bool
 	}{
-		{"clean file",       "main.go",                "main.go",        true},
-		{"nested",           "cmd/server/main.go",     "cmd/server/main.go", true},
-		{"with dot",         "./main.go",              "main.go",        true},
-		{"empty",            "",                       "",               false},
-		{"whitespace only",  "   ",                    "",               false},
-		{"leading slash",    "/etc/passwd",            "",               false},
-		{"absolute root",    "/",                      "",               false},
-		{"traversal",        "../escape",              "",               false},
-		{"traversal nested", "foo/../../escape",       "",               false},
-		{"single dotdot",    "..",                     "",               false},
-		{"single dot",       ".",                      "",               false},
-		{"backslash",        "win\\path",              "",               false},
-		{"nul byte",         "foo\x00bar",             "",               false},
-		{"overlong",         strings.Repeat("a", 250), "",               false},
+		{"clean file", "main.go", "main.go", true},
+		{"nested", "cmd/server/main.go", "cmd/server/main.go", true},
+		{"with dot", "./main.go", "main.go", true},
+		{"empty", "", "", false},
+		{"whitespace only", "   ", "", false},
+		{"leading slash", "/etc/passwd", "", false},
+		{"absolute root", "/", "", false},
+		{"traversal", "../escape", "", false},
+		{"traversal nested", "foo/../../escape", "", false},
+		{"single dotdot", "..", "", false},
+		{"single dot", ".", "", false},
+		{"backslash", "win\\path", "", false},
+		{"nul byte", "foo\x00bar", "", false},
+		{"overlong", strings.Repeat("a", 250), "", false},
 		// Note: foo/./bar collapses to foo/bar via filepath.Clean — allowed.
-		{"redundant dot",    "foo/./bar.txt",          "foo/bar.txt",    true},
+		{"redundant dot", "foo/./bar.txt", "foo/bar.txt", true},
 	}
 	for _, c := range cases {
 		got, ok := sanitizeRelPath(c.in)

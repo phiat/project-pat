@@ -269,9 +269,9 @@ func (h *Handler) projects(w http.ResponseWriter, r *http.Request) {
 		}
 		archivedN, _ := h.S.ListArchivedProjects()
 		h.render(w, "projects", map[string]any{
-			"Title":        "projects",
-			"Projects":     projs,
-			"ShowArchived": showArchived,
+			"Title":         "projects",
+			"Projects":      projs,
+			"ShowArchived":  showArchived,
 			"ArchivedCount": len(archivedN),
 		})
 	case http.MethodPost:
@@ -1163,9 +1163,10 @@ func (h *Handler) streamSSE(w http.ResponseWriter, r *http.Request, spec streamS
 // ---- multi-agent team draft (planner → critic → drafter) ----
 
 // streamTeamDraft runs three sequential pro passes:
-//   1. planner  — produces a structured plan/outline given the current doc.
-//   2. critic   — critiques the plan, names risks, suggests adjustments.
-//   3. drafter  — produces the final design doc using plan + critique.
+//  1. planner  — produces a structured plan/outline given the current doc.
+//  2. critic   — critiques the plan, names risks, suggests adjustments.
+//  3. drafter  — produces the final design doc using plan + critique.
+//
 // Intermediate phases are persisted as artifacts so the chain is auditable;
 // the drafter's output overwrites the project's design doc. The client
 // stream emits "phase" SSE events between phases so the UI can re-anchor.

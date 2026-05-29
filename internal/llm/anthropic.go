@@ -17,7 +17,7 @@ import (
 const anthropicVersion = "2023-06-01"
 
 var (
-	anthropicUnknownEvents   sync.Map // event-type -> struct{} (already-logged set)
+	anthropicUnknownEvents sync.Map // event-type -> struct{} (already-logged set)
 )
 
 func warnOnceAnthropicEvent(typ string) {

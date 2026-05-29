@@ -46,19 +46,19 @@ type Agent struct {
 }
 
 type Run struct {
-	ID         int64
-	AgentID    sql.NullInt64
-	AgentName  string
-	ProjectID  sql.NullInt64
+	ID          int64
+	AgentID     sql.NullInt64
+	AgentName   string
+	ProjectID   sql.NullInt64
 	TriggerKind string
-	Status     string
-	Prompt     string
-	Output     string
-	Error      string
-	TokensIn   int
-	TokensOut  int
-	StartedAt  time.Time
-	FinishedAt sql.NullTime
+	Status      string
+	Prompt      string
+	Output      string
+	Error       string
+	TokensIn    int
+	TokensOut   int
+	StartedAt   time.Time
+	FinishedAt  sql.NullTime
 }
 
 // Ideas
@@ -479,11 +479,11 @@ type InboxItem struct {
 	ReadAt    sql.NullTime
 	CreatedAt time.Time
 	// joined from runs + agents for list rendering
-	AgentID    sql.NullInt64
-	AgentName  string
-	RunStatus  string
-	RunOutput  string
-	StartedAt  time.Time
+	AgentID   sql.NullInt64
+	AgentName string
+	RunStatus string
+	RunOutput string
+	StartedAt time.Time
 }
 
 func (s *Store) CreateInboxItem(runID int64, summary string) (int64, error) {

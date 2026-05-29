@@ -24,11 +24,13 @@ func NewRenderer(dir string) (*Renderer, error) {
 	r := &Renderer{
 		dir: dir,
 		funcs: template.FuncMap{
-			"date":       func(t time.Time) string { return t.Format("2006-01-02 15:04") },
-			"truncate":   truncate,
-			"upper":      strings.ToUpper,
-			"lower":      strings.ToLower,
-			"nl2br":      func(s string) template.HTML { return template.HTML(strings.ReplaceAll(template.HTMLEscapeString(s), "\n", "<br>")) },
+			"date":     func(t time.Time) string { return t.Format("2006-01-02 15:04") },
+			"truncate": truncate,
+			"upper":    strings.ToUpper,
+			"lower":    strings.ToLower,
+			"nl2br": func(s string) template.HTML {
+				return template.HTML(strings.ReplaceAll(template.HTMLEscapeString(s), "\n", "<br>"))
+			},
 			"add":        func(a, b int) int { return a + b },
 			"statusPill": statusPill,
 			"safeHTML":   func(s string) template.HTML { return template.HTML(s) },

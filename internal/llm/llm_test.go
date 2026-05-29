@@ -14,19 +14,19 @@ func TestResolveBaseURL(t *testing.T) {
 		want    string
 		wantErr string
 	}{
-		{"empty falls back to default",   "",                              def, ""},
-		{"whitespace falls back",         "   ",                           def, ""},
-		{"https accepted",                "https://api.openai.com/v1",     "https://api.openai.com/v1", ""},
-		{"http accepted (local ollama)",  "http://localhost:11434/v1",     "http://localhost:11434/v1", ""},
-		{"trailing slash trimmed",        "https://api.openai.com/v1/",    "https://api.openai.com/v1", ""},
-		{"file scheme rejected",          "file:///etc/passwd",            "",  "scheme"},
-		{"gopher rejected",               "gopher://host/path",            "",  "scheme"},
-		{"javascript scheme rejected",    "javascript:alert(1)",           "",  "scheme"},
-		{"missing host rejected",         "https:///",                     "",  "host"},
+		{"empty falls back to default", "", def, ""},
+		{"whitespace falls back", "   ", def, ""},
+		{"https accepted", "https://api.openai.com/v1", "https://api.openai.com/v1", ""},
+		{"http accepted (local ollama)", "http://localhost:11434/v1", "http://localhost:11434/v1", ""},
+		{"trailing slash trimmed", "https://api.openai.com/v1/", "https://api.openai.com/v1", ""},
+		{"file scheme rejected", "file:///etc/passwd", "", "scheme"},
+		{"gopher rejected", "gopher://host/path", "", "scheme"},
+		{"javascript scheme rejected", "javascript:alert(1)", "", "scheme"},
+		{"missing host rejected", "https:///", "", "host"},
 		// unparseable URL — url.Parse is permissive so we mostly get errors
 		// via scheme/host checks; this one has a control char which Parse
 		// rejects.
-		{"control chars rejected",        "https://api.openai.com\x7f/v1", "",  ""},
+		{"control chars rejected", "https://api.openai.com\x7f/v1", "", ""},
 	}
 	for _, c := range cases {
 		got, err := resolveBaseURL(c.in, def)
